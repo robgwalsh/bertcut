@@ -1,0 +1,20 @@
+bin/
+obj/
+.vs/
+.idea/
+*.user
+*.suo
+TestResults/
+*.received.*
+
+# Installed by tools/fetch-ffmpeg.ps1 — ~200 MB, and reproducible from that script.
+tools/ffmpeg/
+
+# Video, in a video editor's working tree, is almost always a sample someone dropped in
+# to try something rather than something meant to ship.
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.webm
+*.m4v

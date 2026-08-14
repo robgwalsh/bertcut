@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Filter-graph construction and audio-span merging are implementation details of
+         the export planner, but they are exactly where the subtle ffmpeg mistakes live,
+         so the tests assert on them directly. -->
+    <InternalsVisibleTo Include="BertCut.Core.Tests" />
+  </ItemGroup>
+
+</Project>

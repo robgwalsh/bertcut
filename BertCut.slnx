@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/BertCut.App/BertCut.App.csproj">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="src/BertCut.Core/BertCut.Core.csproj" />
+    <Project Path="src/BertCut.Media/BertCut.Media.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BertCut.Core.Tests/BertCut.Core.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,686 @@
+<Window x:Class="BertCut.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:BertCut.App"
+        Title="BertCut"
+        Height="760" Width="1180"
+        Background="#14171B"
+        UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Display">
+
+    <Window.Resources>
+        <Style x:Key="StatusText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#A9B4C2" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="MonoText" TargetType="TextBlock" BasedOn="{StaticResource StatusText}">
+            <Setter Property="FontFamily" Value="Consolas, Cascadia Mono, monospace" />
+            <Setter Property="Foreground" Value="#E6ECF3" />
+        </Style>
+
+        <!-- Toolbar buttons are deliberately not focusable. The moment one takes focus the
+             bare-letter shortcuts stop reaching the window's key handler, which is the whole
+             ergonomic premise of this editor. -->
+        <Style x:Key="ToolButton" TargetType="Button">
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="IsTabStop" Value="False" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Foreground" Value="#C6D2E0" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Padding" Value="11,5" />
+            <Setter Property="Margin" Value="0,0,6,0" />
+            <Setter Property="Background" Value="#212730" />
+            <Setter Property="BorderBrush" Value="#2C333D" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome"
+                                CornerRadius="5"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="1"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="#2B323D" />
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="#3E4756" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="#181D24" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Chrome" Property="Opacity" Value="0.4" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Same shape, but it warms to red on hover: the one button here that throws work
+             away should look different from the ones that make it. -->
+        <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource ToolButton}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome"
+                                CornerRadius="5"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="1"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="#3A2126" />
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="#6E3239" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="#2A171B" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Chrome" Property="Opacity" Value="0.4" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- A keystroke, drawn as a key. Used for every gesture in the help sheet, including
+             the ones generated from the key map. -->
+        <Style x:Key="KeyCap" TargetType="ContentControl">
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ContentControl">
+                        <Border Background="#232B36" BorderBrush="#3B4756" BorderThickness="1"
+                                CornerRadius="4" Padding="8,3" MinWidth="26" SnapsToDevicePixels="True">
+                            <TextBlock Text="{TemplateBinding Content}"
+                                       FontFamily="Consolas, Cascadia Mono, monospace"
+                                       FontSize="12" Foreground="#DDE7F3"
+                                       TextAlignment="Center" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="Card" TargetType="Border">
+            <Setter Property="Background" Value="#1A2028" />
+            <Setter Property="BorderBrush" Value="#272F3A" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="10" />
+            <Setter Property="Padding" Value="16" />
+            <Setter Property="Margin" Value="0,0,10,10" />
+        </Style>
+
+        <Style x:Key="SectionHead" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#5F6E80" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,24,0,12" />
+        </Style>
+
+        <Style x:Key="CardTitle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#EDF2F8" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+        </Style>
+
+        <Style x:Key="CardBody" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#909EAF" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="LineHeight" Value="18" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+
+        <Storyboard x:Key="HelpIn">
+            <DoubleAnimation Storyboard.TargetName="HelpCard"
+                             Storyboard.TargetProperty="Opacity"
+                             From="0" To="1" Duration="0:0:0.16" />
+            <DoubleAnimation Storyboard.TargetName="HelpCard"
+                             Storyboard.TargetProperty="RenderTransform.(TranslateTransform.Y)"
+                             From="18" To="0" Duration="0:0:0.26">
+                <DoubleAnimation.EasingFunction>
+                    <CubicEase EasingMode="EaseOut" />
+                </DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+        </Storyboard>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Toolbar: the mouse-reachable half of the app. Everything here also has a
+             keystroke, except the reset, which is deliberately harder to reach. -->
+        <Border Grid.Row="0" Background="#1A1E24" BorderBrush="#22272E" BorderThickness="0,0,0,1"
+                Padding="10,7">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Ellipse Width="8" Height="8" Fill="#4F9CF5" Margin="4,0,9,0" VerticalAlignment="Center" />
+                    <TextBlock Text="BertCut" Foreground="#E6ECF3" FontSize="13" FontWeight="SemiBold"
+                               VerticalAlignment="Center" Margin="0,0,14,0" />
+                    <Border Width="1" Background="#262C34" Margin="0,1,14,1" />
+
+                    <!-- The content of these buttons is a panel, so without an explicit
+                         automation name a screen reader has nothing to announce. -->
+                    <Button x:Name="AddSegmentButton" Style="{StaticResource ToolButton}"
+                            Click="OnAddSegmentClick"
+                            AutomationProperties.Name="Add video"
+                            ToolTip="Add a video to the end of the timeline  (Ctrl+A)">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="+" Foreground="#6DD48B" FontSize="14" FontWeight="Bold"
+                                       Margin="0,-1,7,0" />
+                            <TextBlock Text="Add video" />
+                        </StackPanel>
+                    </Button>
+
+                    <Button x:Name="ExportButton" Style="{StaticResource ToolButton}"
+                            Click="OnExportClick"
+                            AutomationProperties.Name="Export"
+                            ToolTip="Export the edited video  (Ctrl+E)">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#x2193;" Foreground="#4F9CF5" FontSize="14" FontWeight="Bold"
+                                       Margin="0,-1,7,0" />
+                            <TextBlock Text="Export" />
+                        </StackPanel>
+                    </Button>
+
+                    <Button x:Name="ResetButton" Style="{StaticResource DangerButton}"
+                            Click="OnResetClick"
+                            AutomationProperties.Name="Reset everything"
+                            ToolTip="Discard every edit and go back to the original video">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#x21BA;" Foreground="#FF7A7A" FontSize="13" Margin="0,-1,7,0" />
+                            <TextBlock Text="Reset everything" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+
+                <Button Grid.Column="2" Style="{StaticResource ToolButton}" Margin="0"
+                        Click="OnHelpClick"
+                        AutomationProperties.Name="How it works"
+                        ToolTip="How BertCut works  (F1)">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="?" Foreground="#4F9CF5" FontSize="13" FontWeight="Bold"
+                                   Margin="0,-1,7,0" />
+                        <TextBlock Text="How it works" />
+                    </StackPanel>
+                </Button>
+            </Grid>
+        </Border>
+
+        <!-- Preview. Nothing here is focusable, so single-letter shortcuts always reach
+             the window handler. -->
+        <Border Grid.Row="1" Background="#0B0D10" Margin="12,12,12,6">
+            <Grid>
+                <Image x:Name="PreviewImage"
+                       Stretch="Uniform"
+                       RenderOptions.BitmapScalingMode="HighQuality"
+                       SnapsToDevicePixels="True" />
+
+                <TextBlock x:Name="EmptyHint"
+                           Text="Ctrl+O to open a video&#x0a;&#x0a;I / O mark in and out · X ripples the marked range away&#x0a;C crops the marked range · P overlays a clip on it&#x0a;Space plays · ← → step a frame · Ctrl+Z undoes&#x0a;F1 for all shortcuts"
+                           Foreground="#5C6774"
+                           FontSize="14"
+                           TextAlignment="Center"
+                           LineHeight="24"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center" />
+
+                <!-- Crop and PiP handles are WPF content drawn over the video. This is the
+                     requirement that ruled out an airspace-bound child window. -->
+                <local:RectEditor x:Name="Placement" />
+            </Grid>
+        </Border>
+
+        <!-- Transport readout -->
+        <Grid Grid.Row="2" Margin="12,0,12,6">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <TextBlock x:Name="TimecodeLabel" Grid.Column="0" Style="{StaticResource MonoText}" FontSize="15" />
+            <TextBlock x:Name="SelectionLabel" Grid.Column="1" Style="{StaticResource StatusText}"
+                       Margin="24,0,0,0" />
+            <TextBlock x:Name="TransportLabel" Grid.Column="2" Style="{StaticResource StatusText}" />
+        </Grid>
+
+        <local:TimelineControl x:Name="Timeline" Grid.Row="3" Margin="12,0,12,6" />
+
+        <!-- Status bar. The transport glyph leads it: a red cross when nothing is moving,
+             green chevrons pointing the way it is, one per doubling of speed. -->
+        <Border Grid.Row="4" Background="#1A1E24" Padding="12,8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <!-- Fixed width so the status text does not shift sideways as the speed
+                     changes, which at 8x would be four times a second. -->
+                <TextBlock x:Name="TransportIcon" Grid.Column="0"
+                           Width="46" TextAlignment="Left"
+                           FontFamily="Segoe UI Symbol, Segoe UI"
+                           FontSize="13" FontWeight="Bold"
+                           Foreground="#FF5C5C" Text="&#x2715;"
+                           VerticalAlignment="Center"
+                           AutomationProperties.Name="Transport state" />
+
+                <TextBlock x:Name="StatusLabel" Grid.Column="1" Style="{StaticResource StatusText}"
+                           TextTrimming="CharacterEllipsis" />
+                <TextBlock x:Name="HintLabel" Grid.Column="2" Style="{StaticResource StatusText}"
+                           Foreground="#5C6774" Text="F1 shortcuts" />
+            </Grid>
+        </Border>
+
+        <!-- The help sheet. Hand-written prose for the parts that need explaining, and a
+             shortcut reference generated from the same KeyMap the dispatcher resolves
+             against — so the sheet cannot drift out of date with the keys. -->
+        <Border x:Name="HelpOverlay"
+                Grid.RowSpan="5"
+                Background="#F00A0C10"
+                Visibility="Collapsed"
+                MouseLeftButtonDown="OnHelpBackdropClick">
+
+            <Border x:Name="HelpCard"
+                    MaxWidth="1000" MaxHeight="740" Margin="28"
+                    CornerRadius="14" BorderBrush="#2E3846" BorderThickness="1">
+                <Border.RenderTransform>
+                    <TranslateTransform />
+                </Border.RenderTransform>
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="0.7,1">
+                        <GradientStop Color="#1D242E" Offset="0" />
+                        <GradientStop Color="#12161C" Offset="1" />
+                    </LinearGradientBrush>
+                </Border.Background>
+
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <!-- Header -->
+                    <Grid Grid.Row="0" Margin="30,26,22,0">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <Ellipse Width="11" Height="11" Fill="#4F9CF5" VerticalAlignment="Center"
+                                         Margin="0,0,11,0" />
+                                <TextBlock Text="BertCut" FontSize="27" FontWeight="Bold" Foreground="#F3F7FC" />
+                            </StackPanel>
+                            <TextBlock Text="Mark a range. Then do one of three things to it."
+                                       FontSize="14" Foreground="#8794A5" Margin="22,7,0,0" />
+                        </StackPanel>
+
+                        <Button HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0"
+                                Style="{StaticResource ToolButton}" Content="&#x2715;"
+                                AutomationProperties.Name="Close"
+                                Padding="9,4" Click="OnHelpCloseClick" />
+                    </Grid>
+
+                    <ScrollViewer Grid.Row="1" Margin="30,4,20,0" Padding="0,0,10,0"
+                                  VerticalScrollBarVisibility="Auto" Focusable="False">
+                        <!-- WPF's stock scrollbar is a light-grey slab; on a sheet this dark
+                             it is the only thing that looks unfinished. -->
+                        <ScrollViewer.Resources>
+                            <Style TargetType="ScrollBar">
+                                <Setter Property="Width" Value="8" />
+                                <Setter Property="Background" Value="Transparent" />
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ScrollBar">
+                                            <Track x:Name="PART_Track" IsDirectionReversed="True"
+                                                   Focusable="False">
+                                                <Track.Thumb>
+                                                    <Thumb Focusable="False">
+                                                        <Thumb.Template>
+                                                            <ControlTemplate TargetType="Thumb">
+                                                                <Border CornerRadius="4" Background="#3A4453" />
+                                                            </ControlTemplate>
+                                                        </Thumb.Template>
+                                                    </Thumb>
+                                                </Track.Thumb>
+                                                <Track.IncreaseRepeatButton>
+                                                    <RepeatButton Command="ScrollBar.PageDownCommand"
+                                                                  Opacity="0" Focusable="False"
+                                                                  IsTabStop="False" />
+                                                </Track.IncreaseRepeatButton>
+                                                <Track.DecreaseRepeatButton>
+                                                    <RepeatButton Command="ScrollBar.PageUpCommand"
+                                                                  Opacity="0" Focusable="False"
+                                                                  IsTabStop="False" />
+                                                </Track.DecreaseRepeatButton>
+                                            </Track>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ScrollViewer.Resources>
+
+                        <StackPanel>
+
+                            <!-- The loop -->
+                            <TextBlock Text="THE LOOP — THREE KEYSTROKES, NO MODIFIERS"
+                                       Style="{StaticResource SectionHead}" Margin="0,14,0,12" />
+
+                            <UniformGrid Columns="4">
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <Border Width="24" Height="24" CornerRadius="12" Background="#1E2E46"
+                                                HorizontalAlignment="Left" Margin="0,0,0,12">
+                                            <TextBlock Text="1" Foreground="#7FB4F7" FontSize="12"
+                                                       FontWeight="Bold" HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center" />
+                                        </Border>
+                                        <ContentControl Style="{StaticResource KeyCap}" Content="I" Margin="0,0,0,10" />
+                                        <TextBlock Text="Mark in" Style="{StaticResource CardTitle}" />
+                                        <TextBlock Text="Park the playhead where the boring bit starts."
+                                                   Style="{StaticResource CardBody}" />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <Border Width="24" Height="24" CornerRadius="12" Background="#1E2E46"
+                                                HorizontalAlignment="Left" Margin="0,0,0,12">
+                                            <TextBlock Text="2" Foreground="#7FB4F7" FontSize="12"
+                                                       FontWeight="Bold" HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center" />
+                                        </Border>
+                                        <ContentControl Style="{StaticResource KeyCap}" Content="O" Margin="0,0,0,10" />
+                                        <TextBlock Text="Mark out" Style="{StaticResource CardTitle}" />
+                                        <TextBlock Text="Where it ends. The strip lights up blue between them."
+                                                   Style="{StaticResource CardBody}" />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <Border Width="24" Height="24" CornerRadius="12" Background="#1E2E46"
+                                                HorizontalAlignment="Left" Margin="0,0,0,12">
+                                            <TextBlock Text="3" Foreground="#7FB4F7" FontSize="12"
+                                                       FontWeight="Bold" HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center" />
+                                        </Border>
+                                        <ContentControl Style="{StaticResource KeyCap}" Content="X" Margin="0,0,0,10" />
+                                        <TextBlock Text="Ripple delete" Style="{StaticResource CardTitle}" />
+                                        <TextBlock Text="Gone, and everything after it slides left to close the gap."
+                                                   Style="{StaticResource CardBody}" />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <Border Width="24" Height="24" CornerRadius="12" Background="#2B2438"
+                                                HorizontalAlignment="Left" Margin="0,0,0,12">
+                                            <TextBlock Text="&#x21BA;" Foreground="#B79BE8" FontSize="12"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        </Border>
+                                        <ContentControl Style="{StaticResource KeyCap}" Content="Ctrl + Z"
+                                                        Margin="0,0,0,10" />
+                                        <TextBlock Text="Undo, always" Style="{StaticResource CardTitle}" />
+                                        <TextBlock Text="200 levels deep, including a reset. Nothing here is a one-way door."
+                                                   Style="{StaticResource CardBody}" />
+                                    </StackPanel>
+                                </Border>
+                            </UniformGrid>
+
+                            <!-- The three operations. Each accent matches the colour that
+                                 operation is drawn in on the timeline. -->
+                            <TextBlock Text="THE THREE OPERATIONS" Style="{StaticResource SectionHead}" />
+
+                            <UniformGrid Columns="3">
+                                <Border Style="{StaticResource Card}" Padding="18">
+                                    <StackPanel>
+                                        <Border Height="3" Width="36" CornerRadius="2" Background="#FF5C5C"
+                                                HorizontalAlignment="Left" Margin="0,0,0,14" />
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                            <ContentControl Style="{StaticResource KeyCap}" Content="X" />
+                                            <ContentControl Style="{StaticResource KeyCap}" Content="Shift + Del"
+                                                            Margin="6,0,0,0" />
+                                        </StackPanel>
+                                        <TextBlock Text="Cut it out" Style="{StaticResource CardTitle}" />
+                                        <TextBlock Style="{StaticResource CardBody}"
+                                                   Text="The marked range disappears and the timeline closes up behind it. Press ↑ and ↓ afterwards to hop between the seams and check the join." />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource Card}" Padding="18">
+                                    <StackPanel>
+                                        <Border Height="3" Width="36" CornerRadius="2" Background="#F2A14C"
+                                                HorizontalAlignment="Left" Margin="0,0,0,14" />
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                            <ContentControl Style="{StaticResource KeyCap}" Content="C" />
+                                        </StackPanel>
+                                        <TextBlock Text="Crop and zoom" Style="{StaticResource CardTitle}" />
+                                        <TextBlock Style="{StaticResource CardBody}"
+                                                   Text="Draw a box over the part worth seeing. For the length of the marked range it zooms to fill the frame, then reverts. Locked to the output ratio, so it never letterboxes." />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource Card}" Padding="18">
+                                    <StackPanel>
+                                        <Border Height="3" Width="36" CornerRadius="2" Background="#6DD48B"
+                                                HorizontalAlignment="Left" Margin="0,0,0,14" />
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                            <ContentControl Style="{StaticResource KeyCap}" Content="P" />
+                                            <ContentControl Style="{StaticResource KeyCap}" Content="Ctrl + I"
+                                                            Margin="6,0,0,0" />
+                                        </StackPanel>
+                                        <TextBlock Text="Overlay a clip" Style="{StaticResource CardTitle}" />
+                                        <TextBlock Style="{StaticResource CardBody}"
+                                                   Text="Picture-in-picture over the marked range. Ctrl+I imports a webcam take to use; with nothing imported, P puts the video on top of itself as a zoomed inset." />
+                                    </StackPanel>
+                                </Border>
+                            </UniformGrid>
+
+                            <!-- Placement -->
+                            <TextBlock Text="PLACING A BOX  ·  AFTER C OR P" Style="{StaticResource SectionHead}" />
+
+                            <Border Style="{StaticResource Card}" Padding="18">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource CardBody}" Margin="0,0,0,14"
+                                               Text="Both operations drop you into the same placement box, and both are aspect-locked — a crop to the output ratio, an overlay to its own source's — so resizing is one pair of keys instead of four. Drag the box, or drag anywhere outside it to draw a new one." />
+                                    <UniformGrid Columns="3">
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,10,8">
+                                            <ContentControl Style="{StaticResource KeyCap}" Content="← ↑ → ↓" />
+                                            <TextBlock Text="move" Style="{StaticResource CardBody}"
+                                                       Margin="9,0,0,0" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,10,8">
+                                            <ContentControl Style="{StaticResource KeyCap}" Content="Shift + ↑ ↓" />
+                                            <TextBlock Text="resize" Style="{StaticResource CardBody}"
+                                                       Margin="9,0,0,0" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,10,8">
+                                            <ContentControl Style="{StaticResource KeyCap}" Content="1 – 5" />
+                                            <TextBlock Text="snap to a corner or the centre"
+                                                       Style="{StaticResource CardBody}"
+                                                       Margin="9,0,0,0" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,10,8">
+                                            <ContentControl Style="{StaticResource KeyCap}" Content="Alt + ← →" />
+                                            <TextBlock Text="slide an overlay's content to sync it"
+                                                       Style="{StaticResource CardBody}"
+                                                       Margin="9,0,0,0" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,10,8">
+                                            <ContentControl Style="{StaticResource KeyCap}" Content="Enter" />
+                                            <TextBlock Text="apply" Style="{StaticResource CardBody}"
+                                                       Margin="9,0,0,0" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,10,8">
+                                            <ContentControl Style="{StaticResource KeyCap}" Content="Esc" />
+                                            <TextBlock Text="cancel" Style="{StaticResource CardBody}"
+                                                       Margin="9,0,0,0" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </UniformGrid>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Toolbar -->
+                            <TextBlock Text="THE TOOLBAR" Style="{StaticResource SectionHead}" />
+
+                            <UniformGrid Columns="4">
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                            <TextBlock Text="+" Foreground="#6DD48B" FontSize="15"
+                                                       FontWeight="Bold" Margin="0,0,8,0" />
+                                            <TextBlock Text="Add video" Style="{StaticResource CardTitle}"
+                                                       Margin="0" />
+                                        </StackPanel>
+                                        <TextBlock Style="{StaticResource CardBody}"
+                                                   Text="Joins another file onto the end of the timeline as a new segment, scaled to the project's frame. Ctrl+A does the same." />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                            <TextBlock Text="&#x2193;" Foreground="#4F9CF5" FontSize="15"
+                                                       FontWeight="Bold" Margin="0,0,8,0" />
+                                            <TextBlock Text="Export" Style="{StaticResource CardTitle}"
+                                                       Margin="0" />
+                                        </StackPanel>
+                                        <TextBlock Style="{StaticResource CardBody}"
+                                                   Text="Writes the edited video out, picking the fast path automatically. Ctrl+E does the same." />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                            <TextBlock Text="&#x21BA;" Foreground="#FF7A7A" FontSize="14"
+                                                       Margin="0,0,8,0" />
+                                            <TextBlock Text="Reset everything" Style="{StaticResource CardTitle}"
+                                                       Margin="0" />
+                                        </StackPanel>
+                                        <TextBlock Style="{StaticResource CardBody}"
+                                                   Text="Drops every cut, crop, overlay and added clip, back to the video as you opened it. It asks first, and Ctrl+Z still brings it all back." />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                            <TextBlock Text="?" Foreground="#4F9CF5" FontSize="15"
+                                                       FontWeight="Bold" Margin="0,0,8,0" />
+                                            <TextBlock Text="How it works" Style="{StaticResource CardTitle}"
+                                                       Margin="0" />
+                                        </StackPanel>
+                                        <TextBlock Style="{StaticResource CardBody}"
+                                                   Text="This sheet. F1 opens and closes it too, from anywhere — including mid-crop." />
+                                    </StackPanel>
+                                </Border>
+                            </UniformGrid>
+
+                            <!-- Export -->
+                            <TextBlock Text="GETTING IT OUT" Style="{StaticResource SectionHead}" />
+
+                            <Border Style="{StaticResource Card}" Padding="18">
+                                <!-- A Grid, not a horizontal StackPanel: that would hand the
+                                     paragraph infinite width and it would never wrap. -->
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <ContentControl Grid.Column="0" Style="{StaticResource KeyCap}"
+                                                    Content="Ctrl + E"
+                                                    VerticalAlignment="Top" Margin="0,2,16,0" />
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="Export" Style="{StaticResource CardTitle}" />
+                                        <TextBlock Style="{StaticResource CardBody}"
+                                                   Text="If you only cut, the video is copied rather than re-encoded and export runs at roughly file-copy speed. Add a crop or an overlay and only the kept frames are re-encoded. There is no Save: edits autosave against the video's content and come back — undo history included — the next time you open it." />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+
+                            <!-- Generated from the key map -->
+                            <TextBlock Text="EVERY SHORTCUT" Style="{StaticResource SectionHead}" />
+
+                            <ItemsControl x:Name="HelpList" Focusable="False" Margin="0,0,0,10">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <UniformGrid Columns="2" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Style="{StaticResource Card}">
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Key}" Foreground="#4F9CF5"
+                                                           FontSize="12" FontWeight="SemiBold"
+                                                           Margin="0,0,0,12" />
+                                                <ItemsControl ItemsSource="{Binding}" Focusable="False">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Grid Margin="0,3">
+                                                                <Grid.ColumnDefinitions>
+                                                                    <!-- Wide enough for the
+                                                                         longest gesture the key
+                                                                         map can produce,
+                                                                         Ctrl + Shift + Z. -->
+                                                                    <ColumnDefinition Width="156" />
+                                                                    <ColumnDefinition Width="*" />
+                                                                </Grid.ColumnDefinitions>
+                                                                <ContentControl Grid.Column="0"
+                                                                                Style="{StaticResource KeyCap}"
+                                                                                Content="{Binding Gesture}" />
+                                                                <TextBlock Grid.Column="1"
+                                                                           Text="{Binding Description}"
+                                                                           Foreground="#96A3B3" FontSize="12"
+                                                                           TextWrapping="Wrap"
+                                                                           VerticalAlignment="Center" />
+                                                            </Grid>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <Border Grid.Row="2" BorderBrush="#242C36" BorderThickness="0,1,0,0" Padding="30,14">
+                        <Grid>
+                            <TextBlock Foreground="#6C7A8B" FontSize="12"
+                                       Text="No Save button — everything autosaves against the video you opened." />
+                            <TextBlock HorizontalAlignment="Right" Foreground="#4E5B6B" FontSize="12"
+                                       Text="Esc or F1 to close" />
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+        </Border>
+    </Grid>
+</Window>
