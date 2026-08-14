@@ -1,0 +1,42 @@
+# Line endings are decided here, not by each clone's core.autocrlf. Without this file a
+# contributor with autocrlf=false commits CRLF, and the next Windows checkout rewrites
+# every line of it — a whole-file diff that says nothing.
+#
+# text=auto: store LF in the repository, check out whatever the platform uses. Everything
+# already committed is LF, so this changes no blob; it only pins the behaviour.
+* text=auto
+
+# Better hunk headers — git ships a C# function-name parser and only uses it when asked.
+*.cs      text diff=csharp
+
+# Shell scripts are executed by their line endings. A CRLF sh script fails with an
+# unreadable error about a command name with a carriage return in it.
+*.sh      text eol=lf
+
+# The counterpart: Windows Powershell is happiest with CRLF, and this is a Windows repo
+# whose only script is the ffmpeg fetcher.
+*.ps1     text eol=crlf
+*.cmd     text eol=crlf
+*.bat     text eol=crlf
+
+# Visual Studio writes these with CRLF whatever anyone else does.
+*.sln     text eol=crlf
+*.slnx    text eol=crlf
+
+# Never normalise, never diff as text. None of these are in the tree yet; they are here so
+# the first screenshot added to the README cannot be corrupted on the way in.
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.pdf     binary
+*.zip     binary
+*.7z      binary
+*.dll     binary
+*.exe     binary
+*.pdb     binary
+*.mp4     binary
+*.mkv     binary
+*.mov     binary
+*.webm    binary
