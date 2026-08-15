@@ -54,7 +54,23 @@ public enum EditorIntent
     MarkIn, MarkOut, ClearMarks,
     RippleDelete, SplitAtPlayhead,
     BeginCrop, ClearCropAtPlayhead,
-    BeginOverlay, RemoveOverlayAtPlayhead, ToggleOverlayMute,
+    BeginOverlay, RemoveOverlayAtPlayhead,
+
+    /// <summary>
+    /// No longer bound and no longer acted on: the export mixes the base track's audio and
+    /// only that, so muting an overlay never changed anything.
+    /// <see cref="ToggleMute"/> took its key and does something a user can hear.
+    /// </summary>
+    /// <remarks>
+    /// The value stays in the enum because <c>OverlayClip.Muted</c> and the session format
+    /// still carry the flag, and <c>TimelineEdits.ToggleOverlayMute</c> still writes it. A
+    /// customization stored against the old slot is dropped as an unknown id, which is the
+    /// same thing that happens to any binding whose default disappears.
+    /// </remarks>
+    ToggleOverlayMute,
+
+    /// <summary>Silence the preview. Monitoring only — it does not change the export.</summary>
+    ToggleMute,
     Commit, Cancel,
     NudgeLeft, NudgeRight, NudgeUp, NudgeDown,
 
@@ -68,6 +84,12 @@ public enum EditorIntent
 
     /// <summary>Slide the overlay's source in-point, to sync its content against the base.</summary>
     TrimOverlayBack, TrimOverlayForward,
+
+    /// <summary>
+    /// Find that same alignment automatically, by correlating the overlay's audio against
+    /// the base track's underneath it.
+    /// </summary>
+    SyncOverlayAudio,
 
     Undo, Redo,
     OpenFile, ImportSource, Export,
@@ -143,7 +165,8 @@ public static class KeyMap
         new(EditorKey.C, EditorModifiers.Shift, EditorMode.Normal, EditorIntent.ClearCropAtPlayhead, "Clear the crop under the playhead"),
         new(EditorKey.P, EditorModifiers.None, EditorMode.Normal, EditorIntent.BeginOverlay, "Place an overlay over the marked range"),
         new(EditorKey.P, EditorModifiers.Shift, EditorMode.Normal, EditorIntent.RemoveOverlayAtPlayhead, "Remove the overlay under the playhead"),
-        new(EditorKey.M, EditorModifiers.None, EditorMode.Normal, EditorIntent.ToggleOverlayMute, "Mute / unmute the overlay"),
+        new(EditorKey.A, EditorModifiers.None, EditorMode.Normal, EditorIntent.SyncOverlayAudio, "Sync the overlay to the base track by its sound"),
+        new(EditorKey.M, EditorModifiers.None, EditorMode.Normal, EditorIntent.ToggleMute, "Mute / unmute the preview"),
 
         // Crop and overlay placement share their editing keys, so the gesture for putting
         // a rectangle somewhere is the same one in both modes.
@@ -153,6 +176,7 @@ public static class KeyMap
         // Only overlays have a source to slide against the base track.
         new(EditorKey.Left, EditorModifiers.Alt, EditorMode.Overlay, EditorIntent.TrimOverlayBack, "Overlay content back one frame"),
         new(EditorKey.Right, EditorModifiers.Alt, EditorMode.Overlay, EditorIntent.TrimOverlayForward, "Overlay content forward one frame"),
+        new(EditorKey.A, EditorModifiers.None, EditorMode.Overlay, EditorIntent.SyncOverlayAudio, "Sync to the base track by sound"),
 
         // Document and view
         new(EditorKey.Z, EditorModifiers.Control, EditorMode.Normal, EditorIntent.Undo, "Undo"),
@@ -221,12 +245,14 @@ public static class KeyMap
                 or EditorIntent.Stop or EditorIntent.StepBack or EditorIntent.StepForward
                 or EditorIntent.StepBackSecond or EditorIntent.StepForwardSecond
                 or EditorIntent.PreviousEdit or EditorIntent.NextEdit
-                or EditorIntent.GoToStart or EditorIntent.GoToEnd => "Navigate",
+                or EditorIntent.GoToStart or EditorIntent.GoToEnd
+                or EditorIntent.ToggleMute => "Navigate",
 
             EditorIntent.MarkIn or EditorIntent.MarkOut or EditorIntent.ClearMarks
                 or EditorIntent.RippleDelete or EditorIntent.SplitAtPlayhead
                 or EditorIntent.BeginCrop or EditorIntent.ClearCropAtPlayhead
                 or EditorIntent.BeginOverlay or EditorIntent.RemoveOverlayAtPlayhead
+                or EditorIntent.SyncOverlayAudio
                 or EditorIntent.ToggleOverlayMute => "Edit",
 
             _ => "File and view",

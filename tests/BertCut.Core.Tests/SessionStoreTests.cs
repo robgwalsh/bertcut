@@ -185,7 +185,7 @@ public class KeyMapTests
     [Fact]
     public void Unbound_keys_resolve_to_nothing()
     {
-        Assert.Equal(EditorIntent.None, KeyMap.Resolve(EditorKey.A, EditorModifiers.None, EditorMode.Normal));
+        Assert.Equal(EditorIntent.None, KeyMap.Resolve(EditorKey.Q, EditorModifiers.None, EditorMode.Normal));
         Assert.Equal(EditorIntent.None, KeyMap.Resolve(EditorKey.None, EditorModifiers.None, EditorMode.Normal));
     }
 }

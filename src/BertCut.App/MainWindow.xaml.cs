@@ -11,6 +11,7 @@ using BertCut.Core.Export;
 using BertCut.Core.Input;
 using BertCut.Core.Session;
 using BertCut.Media;
+using BertCut.Media.Audio;
 using Microsoft.Win32;
 
 namespace BertCut.App;
@@ -32,12 +33,16 @@ public partial class MainWindow : Window
     /// </remarks>
     private KeyBindings _keys = KeyBindingStore.Load();
 
-    public MainWindow(FfmpegRuntime runtime)
+    /// <param name="audioOutput">
+    /// Where preview audio goes. The app leaves this null and gets the sound card; the
+    /// harness passes a silent one, so a scripted run is no more audible than it is visible.
+    /// </param>
+    public MainWindow(FfmpegRuntime runtime, Func<IAudioOutput>? audioOutput = null)
     {
         InitializeComponent();
 
         _runtime = runtime;
-        _model = new EditorViewModel(runtime);
+        _model = new EditorViewModel(runtime, audioOutput);
         _model.PropertyChanged += OnModelChanged;
         _model.FrameChanged += Present;
         _model.SessionRestored += ShowRestoreToast;
@@ -262,6 +267,60 @@ public partial class MainWindow : Window
         Keyboard.Focus(this);
     }
 
+    /// <summary>
+    /// Confirms, then closes everything and releases the video files.
+    /// </summary>
+    /// <remarks>
+    /// The prompt is here for the same reason the reset's is — a confirmation is a UI
+    /// decision, and <c>CloseAll</c> stays callable without one. It defaults to No. Unlike
+    /// the reset, though, this one is not undoable: closing is not an edit, and afterwards
+    /// there is no document left for Ctrl+Z to act on. What survives is the autosave, which
+    /// is what the prompt promises and what makes this recoverable at all.
+    /// </remarks>
+    private void OnClearClick(object sender, RoutedEventArgs e)
+    {
+        if (!_model.HasMedia)
+        {
+            StatusLabel.Text = "Nothing open.";
+            return;
+        }
+
+        var answer = MessageBox.Show(
+            this,
+            "Close everything?\n\n"
+            + "The window is emptied and BertCut lets go of the video files, so you can "
+            + "move, rename or delete them.\n\n"
+            + "Your edits are saved against each video first — open one again and they "
+            + "come back — but Ctrl+Z will not bring this window back.",
+            "BertCut",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+
+        if (answer == MessageBoxResult.Yes) ClearWorkspace();
+
+        Keyboard.Focus(this);
+    }
+
+    /// <summary>
+    /// Puts the shell back to how it starts, and drops its own hold on the last frame.
+    /// </summary>
+    /// <remarks>
+    /// The bitmap matters. <c>Present</c> only builds a new surface when the frame size
+    /// changes, so a stale one would be kept — and shown — until a video of a different
+    /// size was opened. Clearing it here is also what brings the opening hint back.
+    /// </remarks>
+    internal void ClearWorkspace()
+    {
+        HideRestoreToast();
+
+        _model.CloseAll();
+
+        _surface = null;
+        PreviewImage.Source = null;
+        EmptyHint.Visibility = Visibility.Visible;
+    }
+
     private void OnHelpCloseClick(object sender, RoutedEventArgs e) => HideHelp();
 
     /// <summary>Closes the sheet when the dimmed area around it is clicked, not the sheet itself.</summary>
@@ -462,6 +521,10 @@ public partial class MainWindow : Window
         BuildHelp();
         BuildToolTips();
 
+        // After BuildToolTips, which would otherwise overwrite this button's tooltip with
+        // one built from a name that no longer matches its glyph.
+        ApplyMuteGlyph();
+
         EmptyHint.Text =
             $"{Gesture(EditorIntent.OpenFile)} to open a video\n\n"
             + $"{Gesture(EditorIntent.MarkIn)} / {Gesture(EditorIntent.MarkOut)} mark in and out · "
@@ -487,7 +550,10 @@ public partial class MainWindow : Window
     /// </remarks>
     private void BuildToolTips()
     {
-        foreach (var button in Buttons(Toolbar))
+        // The transport row is not the toolbar, but its buttons are the same thing wearing
+        // a smaller icon, and they are the ones most in need of a tooltip: at 10 pixels a
+        // glyph names itself less well than it does at 17.
+        foreach (var button in Buttons(Toolbar).Concat(Buttons(TransportControls)))
             button.ToolTip = new ShortcutTip(
                 AutomationProperties.GetName(button),
                 button.Tag is EditorIntent intent ? Gesture(intent) : "",
@@ -618,6 +684,12 @@ public partial class MainWindow : Window
         SelectionLabel.Text = _model.SelectionText;
         TransportLabel.Text = _model.TransportText;
 
+        // Whichever of the two is the one worth pressing. Assigned unconditionally: setting
+        // Visibility to the value it already holds is free, and this runs every frame while
+        // the video is playing.
+        PlayButton.Visibility = _model.IsStopped ? Visibility.Visible : Visibility.Collapsed;
+        StopButton.Visibility = _model.IsStopped ? Visibility.Collapsed : Visibility.Visible;
+
         TransportIcon.Text = _model.TransportGlyph;
         TransportIcon.Foreground = _model.IsStopped ? StoppedBrush : MovingBrush;
 
@@ -625,8 +697,44 @@ public partial class MainWindow : Window
         TransportIcon.ToolTip = _model.TransportText;
         AutomationProperties.SetHelpText(TransportIcon, _model.TransportText);
 
+        // Unlike the transport, this changes only when the key is pressed, so it is worth the
+        // property check: swapping a Geometry every frame of playback would be work for
+        // nothing.
+        if (e.PropertyName is nameof(EditorViewModel.IsMuted)) ApplyMuteGlyph();
+
         if (e.PropertyName is nameof(EditorViewModel.Status)) StatusLabel.Text = _model.Status;
     }
+
+    /// <summary>
+    /// Points the mute button at whichever glyph and wording matches the current state.
+    /// </summary>
+    /// <remarks>
+    /// Also called from <see cref="ApplyBindings"/>, because the tooltip prints the key and
+    /// the user can move it. Rebuilding the tooltip here rather than leaving it to
+    /// <see cref="BuildToolTips"/> is what keeps the name in step with the glyph: the shared
+    /// builder reads a fixed automation name, and this button's changes.
+    /// </remarks>
+    private void ApplyMuteGlyph()
+    {
+        var muted = _model.IsMuted;
+        var label = muted ? "Unmute the preview" : "Mute the preview";
+
+        MuteButton.Content = FindResource(muted ? "Icon.Muted" : "Icon.Sound");
+        MuteButton.Foreground = muted ? MutedBrush : UnmutedBrush;
+
+        AutomationProperties.SetName(MuteButton, label);
+
+        MuteButton.ToolTip = new ShortcutTip(
+            label,
+            Gesture(EditorIntent.ToggleMute),
+            "Monitoring only — it does not change the exported file.");
+    }
+
+    /// <summary>Warm enough to catch the eye, since silence has no other tell.</summary>
+    private static readonly Brush MutedBrush = Frozen(Color.FromRgb(0xE0, 0x8A, 0x55));
+
+    /// <summary>The same grey the rest of the transport chips use.</summary>
+    private static readonly Brush UnmutedBrush = Frozen(Color.FromRgb(0x9A, 0xA8, 0xB9));
 
     private static Brush Frozen(Color color)
     {

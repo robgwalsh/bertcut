@@ -51,26 +51,40 @@ Exit codes: `0` pass · `1` a command or assertion failed · `2` environment · 
 ## Commands
 
 ```
-sample <path> [seconds]     synthesise a testsrc2 clip; it prints its own frame number
+sample <path> [seconds]     synthesise a testsrc2 clip; it prints its own frame number,
+                            over a tone with an aperiodic envelope
+sample-angles <path> [sec]  one clip holding the same event twice, the second time quieter
+                            and noisier — the fixture the audio sync is meant for
 open|import|append <path>
 key <gesture>               through the live key map:  key I  ·  key Ctrl+Z  ·  key >
 intent <EditorIntent>       straight to the window's single dispatch point
-goto <frame> | play | stop | tick [n] | sleep <ms> | reset | settle [ms]
+goto <frame> | play | stop | tick [n] | sleep <ms> | reset | close | settle [ms]
 shot <name> [element]       PNG of the window, or of any x:Name'd element
 dump-preview <name>.png     the composited video frame alone, no interface around it
 state                       one JSON line of everything worth asserting on
 assert-status <substring> | assert-timecode <text> | assert-frame <n>
-assert-frame-between <a> <b> | assert-visible <Name> | assert-hidden <Name> | assert-has-media
+assert-frame-between <a> <b> | assert-visible <Name> | assert-hidden <Name>
+assert-overlay-source-start <a> [b]   where the overlay under the playhead reads from in
+                                      its own source — what the audio sync moves
+assert-muted | assert-unmuted
+assert-has-media | assert-no-media | assert-unlocked <path>
 echo <text>                 '#' at the start of a line is a comment
 ```
 
 Options: `--out <dir>` · `--state-dir <dir>` · `--keep-state` · `--timeout <sec>` ·
-`--busy-timeout <ms>` · `--keep-going` · `--verbose`
+`--busy-timeout <ms>` · `--keep-going` · `--audio` · `--verbose`
 
-Element names come straight from `MainWindow.xaml`: `Toolbar`, `PreviewImage`, `EmptyHint`,
-`Timeline`, `Placement`, `TimecodeLabel`, `SelectionLabel`, `StatusLabel`, `TransportIcon`,
-`TransportLabel`, `HelpOverlay`, `HelpCard`, `SettingsOverlay`, `Settings`, `RestoreToast`,
-`ResetButton`, `HintLabel`.
+Element names come straight from `MainWindow.xaml`: `Toolbar`, `ClearButton`, `ResetButton`,
+`PreviewImage`, `EmptyHint`, `Placement`, `RestoreToast`, `TransportRow`, `TransportControls`,
+`PlayButton`, `StopButton`, `MuteButton`, `TimecodeLabel`, `SelectionLabel`, `TransportLabel`,
+`Timeline`, `TransportIcon`, `StatusLabel`, `HintLabel`, `HelpOverlay`, `HelpCard`, `HelpList`,
+`SettingsOverlay`, `Settings`.
+
+**A run makes no sound** unless you pass `--audio`. The harness injects a null sink, so the
+whole playback path still runs — decoders, segment boundaries, the clock the playhead follows
+— into something that consumes it at real time and throws it away. Letting it reach the
+speakers is as intrusive as putting the window on screen, so do not pass `--audio` unless you
+were asked to.
 
 ## Blocked on purpose
 
@@ -111,7 +125,9 @@ byte-identical.
   and DPI. Assert through `state`, `assert-status`, `assert-visible`. Pixel comparison is fine
   on `dump-preview` output.
 - **Playback assertions must be bounded** (`assert-frame-between`) because it runs off a real
-  stopwatch. For an exact frame, `goto` there.
+  clock — the audio device's own position at 1x, a stopwatch otherwise. For an exact frame,
+  `goto` there. And `sleep` does not advance playback by itself: it blocks the dispatcher
+  thread, so the composition tick cannot fire. Write `play; sleep 600; tick`.
 - Each run gets a scratch `BERTCUT_STATE_DIR`, so it cannot inherit the previous run's edits
   or touch the user's real sessions and key bindings. Use `--keep-state` only when you mean to
   test session restore across two runs.

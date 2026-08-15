@@ -147,8 +147,35 @@ public static class TimelineEdits
         p with { Overlays = p.Overlays.SetItem(index, p.Overlays[index] with { Dest = dest }) };
 
     /// <summary>Toggles an overlay clip's audio.</summary>
+    /// <remarks>
+    /// Retained because sessions written by earlier builds carry the flag, but nothing reads
+    /// it: the export mixes the base track's audio and only that, deliberately — two angles
+    /// of one event carry near-identical sound, and summing them combs rather than enriches.
+    /// The <c>M</c> key now mutes preview monitoring instead, which does not belong in the
+    /// document at all.
+    /// </remarks>
     public static Project ToggleOverlayMute(Project p, int index) =>
         p with { Overlays = p.Overlays.SetItem(index, p.Overlays[index] with { Muted = !p.Overlays[index].Muted }) };
+
+    /// <summary>
+    /// Slides where an overlay reads from in its own source, without moving it on the timeline.
+    /// </summary>
+    /// <remarks>
+    /// The committed form of what Alt+←/→ does one frame at a time while placing, and what
+    /// the audio sync writes when it finds the alignment in one go. Clamped so the overlay
+    /// cannot be pushed past the end of its source and start showing nothing.
+    /// </remarks>
+    public static Project SetOverlaySourceStart(Project p, int index, long sourceStartFrame)
+    {
+        var clip = p.Overlays[index];
+        var source = p.RequireSource(clip.SourceId);
+        var limit = Math.Max(0, source.FrameCount - clip.Range.Length);
+
+        var clamped = Math.Clamp(sourceStartFrame, 0, limit);
+        if (clamped == clip.SourceStartFrame) return p;
+
+        return p with { Overlays = p.Overlays.SetItem(index, clip with { SourceStartFrame = clamped }) };
+    }
 
     // ---- base track helpers -------------------------------------------------------
 

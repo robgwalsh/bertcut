@@ -85,11 +85,47 @@ public class KeyBindingsTests
     [Fact]
     public void An_unbound_action_cannot_be_reached_by_any_keystroke()
     {
-        var bindings = KeyBindings.Default.Unbind(Entry(KeyBindings.Default, EditorIntent.ToggleOverlayMute));
+        var bindings = KeyBindings.Default.Unbind(Entry(KeyBindings.Default, EditorIntent.ToggleMute));
 
         Assert.Equal(EditorIntent.None, bindings.Resolve(EditorKey.M, EditorModifiers.None, EditorMode.Normal));
         Assert.Equal(EditorIntent.None, bindings.Resolve(EditorKey.None, EditorModifiers.None, EditorMode.Normal));
-        Assert.DoesNotContain(bindings.Effective, b => b.Intent == EditorIntent.ToggleOverlayMute);
+        Assert.DoesNotContain(bindings.Effective, b => b.Intent == EditorIntent.ToggleMute);
+    }
+
+    /// <remarks>
+    /// The sync key is bound in both Normal and Overlay mode, because it means the same
+    /// thing whether the overlay has been committed or is still being positioned. Mode-scoped
+    /// resolution is what makes that one action rather than two.
+    /// </remarks>
+    [Fact]
+    public void Syncing_by_audio_is_reachable_while_placing_an_overlay_and_after()
+    {
+        Assert.Equal(
+            EditorIntent.SyncOverlayAudio,
+            KeyMap.Resolve(EditorKey.A, EditorModifiers.None, EditorMode.Normal));
+
+        Assert.Equal(
+            EditorIntent.SyncOverlayAudio,
+            KeyMap.Resolve(EditorKey.A, EditorModifiers.None, EditorMode.Overlay));
+
+        // Not while dragging a crop, which has no source to slide.
+        Assert.Equal(
+            EditorIntent.None,
+            KeyMap.Resolve(EditorKey.A, EditorModifiers.None, EditorMode.Crop));
+    }
+
+    /// <remarks>
+    /// M used to mute an overlay, which never affected anything. It now mutes the preview,
+    /// and the old intent is left unbound rather than removed.
+    /// </remarks>
+    [Fact]
+    public void M_mutes_the_preview_and_no_key_reaches_the_old_overlay_mute()
+    {
+        Assert.Equal(
+            EditorIntent.ToggleMute,
+            KeyMap.Resolve(EditorKey.M, EditorModifiers.None, EditorMode.Normal));
+
+        Assert.DoesNotContain(KeyMap.Bindings, b => b.Intent == EditorIntent.ToggleOverlayMute);
     }
 
     [Fact]

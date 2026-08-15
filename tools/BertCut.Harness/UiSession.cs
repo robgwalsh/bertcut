@@ -8,6 +8,7 @@ using BertCut.Core.Input;
 using AppShell = BertCut.App.App;
 using BertCut.Core.Session;
 using BertCut.Media;
+using BertCut.Media.Audio;
 using BertCut.Media.Decode;
 
 namespace BertCut.Harness;
@@ -93,7 +94,12 @@ internal sealed class UiSession : IDisposable
         // within a tick rather than lasting until the run settles.
         var guard = ForegroundGuard.Start(before.Handle, log);
 
-        var window = new MainWindow(runtime);
+        // Silent unless the run explicitly asked for sound. A window parked offscreen that
+        // played through the speakers would still interrupt whoever is at the keyboard.
+        var window = new MainWindow(
+            runtime,
+            options.Audio ? null : () => new SilentAudioOutput());
+
         window.WindowStartupLocation = WindowStartupLocation.Manual;
         window.ShowActivated = false;
         window.ShowInTaskbar = false;

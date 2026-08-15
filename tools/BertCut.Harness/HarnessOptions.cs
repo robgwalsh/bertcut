@@ -24,6 +24,18 @@ internal sealed class HarnessOptions
     /// <summary>Carry on after a failed command rather than stopping at the first one.</summary>
     public bool KeepGoing { get; init; }
 
+    /// <summary>
+    /// Let preview audio reach the sound card.
+    /// </summary>
+    /// <remarks>
+    /// Off by default, and deliberately so. Parking the window offscreen is only half of not
+    /// interrupting someone; sound out of their speakers while they work is the same
+    /// intrusion through a different sense. With this off the whole playback path still runs
+    /// — decoders, segment boundaries, the clock the playhead follows — into a sink that
+    /// discards it at real time, so timing assertions still mean what they say.
+    /// </remarks>
+    public bool Audio { get; init; }
+
     public bool Verbose { get; init; }
 
     /// <summary>Exit codes, so a caller can tell a failed assertion from a broken environment.</summary>
@@ -50,6 +62,7 @@ internal sealed class HarnessOptions
           --timeout <sec>     watchdog, in seconds      (default: 120)
           --busy-timeout <ms> longest allowed open/import (default: 60000)
           --keep-going        do not stop at the first failure
+          --audio             let preview audio reach the speakers (silent by default)
           --verbose
           --help
 
@@ -69,6 +82,7 @@ internal sealed class HarnessOptions
         var timeout = 120;
         var busyTimeout = 60_000;
         var keepGoing = false;
+        var audio = false;
         var verbose = false;
 
         for (var i = 0; i < args.Length; i++)
@@ -88,6 +102,7 @@ internal sealed class HarnessOptions
                 case "--timeout": timeout = int.Parse(Next("--timeout")); break;
                 case "--busy-timeout": busyTimeout = int.Parse(Next("--busy-timeout")); break;
                 case "--keep-going": keepGoing = true; break;
+                case "--audio": audio = true; break;
                 case "--verbose": verbose = true; break;
 
                 case "--help" or "-h" or "/?":
@@ -138,6 +153,7 @@ internal sealed class HarnessOptions
             TimeoutSeconds = timeout,
             BusyTimeoutMs = busyTimeout,
             KeepGoing = keepGoing,
+            Audio = audio,
             Verbose = verbose,
         };
     }

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Windows;
+using BertCut.App;
 using BertCut.Core.Input;
 using BertCut.Media;
 
@@ -82,6 +83,7 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
             case "echo": output.WriteLine(rest); break;
 
             case "sample": Sample(rest); break;
+            case "sample-angles": SampleAngles(rest); break;
             case "open": Open(rest); break;
             case "import": Load(rest, path => session.Model.ImportAsync(path)); break;
             case "append": Load(rest, path => session.Model.AppendAsync(path)); break;
@@ -95,6 +97,7 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
             case "tick": Tick(rest); break;
             case "sleep": Thread.Sleep(Number(rest, "sleep")); break;
             case "reset": session.Model.ResetAll(); session.Settle(); break;
+            case "close": Close(); break;
             case "settle": session.Settle(rest.Length == 0 ? 0 : Number(rest, "settle")); break;
 
             case "shot": Shot(rest); break;
@@ -105,9 +108,14 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
             case "assert-timecode": AssertTimecode(rest); break;
             case "assert-frame": AssertFrame(rest); break;
             case "assert-frame-between": AssertFrameBetween(rest); break;
+            case "assert-overlay-source-start": AssertOverlaySourceStart(rest); break;
+            case "assert-muted": AssertMuted(rest, expected: true); break;
+            case "assert-unmuted": AssertMuted(rest, expected: false); break;
             case "assert-visible": AssertVisibility(rest, Visibility.Visible); break;
             case "assert-hidden": AssertVisibility(rest, Visibility.Visible, expected: false); break;
             case "assert-has-media": AssertHasMedia(); break;
+            case "assert-no-media": AssertNoMedia(); break;
+            case "assert-unlocked": AssertUnlocked(rest); break;
 
             default:
                 throw new FormatException($"'{verb}' is not a command. Run with --help for the list.");
@@ -124,6 +132,17 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
         var seconds = tail.Length == 0 ? 6 : Number(tail, "sample");
 
         SampleMedia.Write(session.Runtime, Resolve(path), seconds);
+    }
+
+    /// <summary>The two-angle fixture the audio sync is meant for.</summary>
+    private void SampleAngles(string rest)
+    {
+        var (path, tail) = Split(rest);
+        if (path.Length == 0) throw new FormatException("sample-angles needs a file name.");
+
+        var seconds = tail.Length == 0 ? 6 : Number(tail, "sample-angles");
+
+        SampleMedia.WriteTwoAngles(session.Runtime, Resolve(path), seconds);
     }
 
     private void Open(string rest)
@@ -267,12 +286,37 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
             ("hasMedia", model.HasMedia ? "true" : "false"),
             ("crops", Text(model.Project.Crops.Length)),
             ("overlays", Text(model.Project.Overlays.Length)),
+
+            // Where the overlay under the playhead reads from in its own source — the number
+            // the audio sync moves, and the only way to assert that it landed.
+            ("overlaySourceStart", OverlaySourceStart(model) is { } start ? Text(start) : "null"),
+
+            ("muted", model.IsMuted ? "true" : "false"),
             ("canUndo", model.CanUndo ? "true" : "false"),
             ("status", Quote(model.Status)),
         };
 
         return "{" + string.Join(",", fields.Select(f => $"{Quote(f.Name)}:{f.Value}")) + "}";
     });
+
+    /// <summary>
+    /// The source in-point of the overlay under the playhead, or of one being placed.
+    /// </summary>
+    /// <remarks>
+    /// Placement mode is checked first, because while an overlay is being positioned the
+    /// pending value is the one the sync key writes and the committed list does not yet
+    /// contain it.
+    /// </remarks>
+    private static long? OverlaySourceStart(EditorViewModel model)
+    {
+        if (model.Mode == EditorMode.Overlay) return model.PendingOverlaySourceStart;
+
+        foreach (var overlay in model.Project.Overlays)
+            if (overlay.Range.Contains(model.Playhead))
+                return overlay.SourceStartFrame;
+
+        return null;
+    }
 
     private static string Text(long value) => value.ToString(CultureInfo.InvariantCulture);
 
@@ -304,6 +348,37 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
 
         if (actual != expected)
             throw new AssertionException($"expected frame {expected}, got {actual}.");
+    }
+
+    /// <summary>
+    /// Asserts where the overlay under the playhead reads from in its own source.
+    /// </summary>
+    /// <remarks>
+    /// Bounded rather than exact, because the audio sync answers to within a frame or so and
+    /// pinning it to a single number would make the assertion about the encoder's priming
+    /// samples rather than about the alignment.
+    /// </remarks>
+    private void AssertOverlaySourceStart(string rest)
+    {
+        var (lowText, highText) = Split(rest);
+        var low = Number(lowText, "assert-overlay-source-start");
+        var high = highText.Length == 0 ? low : Number(highText, "assert-overlay-source-start");
+
+        var actual = session.Dispatcher.Invoke(() => OverlaySourceStart(session.Model))
+            ?? throw new AssertionException("there is no overlay under the playhead.");
+
+        if (actual < low || actual > high)
+            throw new AssertionException(
+                $"expected the overlay to start in source frames [{low}, {high}], got {actual}.");
+    }
+
+    private void AssertMuted(string rest, bool expected)
+    {
+        var actual = session.Dispatcher.Invoke(() => session.Model.IsMuted);
+
+        if (actual != expected)
+            throw new AssertionException(
+                $"expected the preview to be {(expected ? "muted" : "unmuted")}, it is not.");
     }
 
     /// <summary>
@@ -340,6 +415,60 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
     {
         if (!session.Dispatcher.Invoke(() => session.Model.HasMedia))
             throw new AssertionException("no video is open.");
+    }
+
+    private void AssertNoMedia()
+    {
+        if (session.Dispatcher.Invoke(() => session.Model.HasMedia))
+            throw new AssertionException("a video is still open.");
+    }
+
+    /// <summary>
+    /// Asserts this process has let go of a file.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The only honest test of "the handle was released" is to take the file exclusively and
+    /// see whether Windows allows it. <see cref="FileShare.None"/> is what makes it a real
+    /// question: the decoder opens its files shared for reading, so a check that asked only
+    /// for read access would pass while the video was still very much open.
+    /// </para>
+    /// <para>
+    /// Opened for reading rather than writing so that the assertion never modifies the file
+    /// it is asking about, and so it works on a read-only source.
+    /// </para>
+    /// </remarks>
+    private void AssertUnlocked(string rest)
+    {
+        var path = Resolve(Require(rest, "assert-unlocked"));
+
+        if (!File.Exists(path))
+            throw new AssertionException($"there is no file at '{path}' to check.");
+
+        try
+        {
+            using var exclusive = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
+        }
+        catch (IOException e)
+        {
+            throw new AssertionException($"'{path}' is still held open: {e.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Empties the editor, the way the toolbar's close button does.
+    /// </summary>
+    /// <remarks>
+    /// Through the window rather than straight to <c>CloseAll</c>, because releasing the
+    /// files is only half of it — the window also has to let go of the bitmap holding the
+    /// last frame, and a test that skipped that would pass while the picture was still on
+    /// screen. The confirmation prompt is not on this path: it is a modal owned by the
+    /// desktop, and it would appear on the user's screen wherever this window is parked.
+    /// </remarks>
+    private void Close()
+    {
+        session.Dispatcher.Invoke(session.Window.ClearWorkspace);
+        session.Settle();
     }
 
     private FrameworkElement Find(string name) =>

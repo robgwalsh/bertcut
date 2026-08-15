@@ -101,6 +101,17 @@
                             AutomationProperties.Name="Save as"
                             AutomationProperties.HelpText="Write the edited video out to a new file, on the fast path where it can. Your original is never touched." />
 
+                    <!-- Closing goes next to opening and saving, because it belongs to the
+                         same question — which video is in this window — rather than to the
+                         editing keys after the divider. Like the reset it has no key of its
+                         own, and for the same reason: nothing that throws the whole session
+                         away should be one keystroke from something that doesn't. -->
+                    <Button x:Name="ClearButton" Style="{StaticResource DangerIconButton}"
+                            Click="OnClearClick"
+                            Content="{StaticResource Icon.Clear}"
+                            AutomationProperties.Name="Close everything"
+                            AutomationProperties.HelpText="Empties the window and lets go of the video files, so you can move, rename or delete them. It asks first, and your edits come back if you open the same video again." />
+
                     <Border Style="{StaticResource Divider}" />
 
                     <!-- The content of these buttons is a shape, so without an explicit
@@ -257,18 +268,119 @@
             </Grid>
         </Border>
 
-        <!-- Transport readout -->
-        <Grid Grid.Row="2" Margin="12,0,12,6">
+        <!--
+            Transport readout, and the transport itself.
+
+            The controls sit here rather than in the toolbar because this is already the row
+            about where you are in the video, and they are the thing that changes it. They
+            are sized to the row instead of the row to them: the timecode makes it 18px tall
+            and the buttons stay inside that, so adding them cost the preview nothing.
+
+            Centred under the picture, by the oldest trick there is — an Auto column with an
+            equal star on each side. The readouts either side get whatever is left, in equal
+            halves, which is why the cluster lands on the centre line of the video above it
+            rather than on the centre of whatever text happens to be in the row today.
+
+            Same route as every other button in the app — an intent on the Tag, dispatched
+            through Invoke — so each of these is the key it shares a name with, and the
+            tooltip prints whatever that key has since been rebound to.
+        -->
+        <Grid x:Name="TransportRow" Grid.Row="2" Margin="12,0,12,6">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
-            <TextBlock x:Name="TimecodeLabel" Grid.Column="0" Style="{StaticResource MonoText}" FontSize="15" />
-            <TextBlock x:Name="SelectionLabel" Grid.Column="1" Style="{StaticResource StatusText}"
-                       Margin="24,0,0,0" />
-            <TextBlock x:Name="TransportLabel" Grid.Column="2" Style="{StaticResource StatusText}" />
+            <!-- A Grid rather than a horizontal StackPanel, so the selection has a bounded
+                 width to be trimmed against instead of an infinite one. -->
+            <Grid Grid.Column="0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock x:Name="TimecodeLabel" Grid.Column="0"
+                           Style="{StaticResource MonoText}" FontSize="15" />
+                <TextBlock x:Name="SelectionLabel" Grid.Column="1" Style="{StaticResource StatusText}"
+                           Margin="20,0,12,0" TextTrimming="CharacterEllipsis" />
+            </Grid>
+
+            <StackPanel x:Name="TransportControls" Grid.Column="1" Orientation="Horizontal"
+                        VerticalAlignment="Center">
+                <Button Style="{StaticResource TransportButton}" Click="OnActionClick"
+                        Content="{StaticResource Icon.GoToStart}"
+                        Tag="{x:Static input:EditorIntent.GoToStart}"
+                        AutomationProperties.Name="Go to start" />
+
+                <Button Style="{StaticResource TransportButton}" Click="OnActionClick"
+                        Content="{StaticResource Icon.ShuttleReverse}"
+                        Tag="{x:Static input:EditorIntent.ShuttleReverse}"
+                        AutomationProperties.Name="Shuttle reverse"
+                        AutomationProperties.HelpText="Runs backwards. Again for 2x, 4x, 8x." />
+
+                <Button Style="{StaticResource TransportButton}" Click="OnActionClick"
+                        Content="{StaticResource Icon.StepBack}"
+                        Tag="{x:Static input:EditorIntent.StepBack}"
+                        AutomationProperties.Name="Back one frame" />
+
+                <!--
+                    One slot, two buttons, and never both: play is meaningless while the
+                    video is already running and stop is meaningless while it is not, so
+                    each is hidden for exactly as long as pressing it would do nothing.
+                    Collapsed rather than disabled — a greyed-out button is a thing to read
+                    and dismiss, and there is no room in this row to spend on one.
+
+                    They are the same width, so the swap happens without the cluster
+                    shifting under the cursor mid-playback. OnModelChanged does the trade.
+                -->
+                <Button x:Name="PlayButton" Style="{StaticResource TransportPrimaryButton}"
+                        Click="OnActionClick"
+                        Content="{StaticResource Icon.Play}"
+                        Tag="{x:Static input:EditorIntent.PlayPause}"
+                        Foreground="#6DD48B"
+                        AutomationProperties.Name="Play" />
+
+                <Button x:Name="StopButton" Style="{StaticResource TransportPrimaryButton}"
+                        Click="OnActionClick"
+                        Visibility="Collapsed"
+                        Content="{StaticResource Icon.Stop}"
+                        Tag="{x:Static input:EditorIntent.Stop}"
+                        Foreground="#F27B7B"
+                        AutomationProperties.Name="Stop" />
+
+                <Button Style="{StaticResource TransportButton}" Click="OnActionClick"
+                        Content="{StaticResource Icon.StepForward}"
+                        Tag="{x:Static input:EditorIntent.StepForward}"
+                        AutomationProperties.Name="Forward one frame" />
+
+                <Button Style="{StaticResource TransportButton}" Click="OnActionClick"
+                        Content="{StaticResource Icon.ShuttleForward}"
+                        Tag="{x:Static input:EditorIntent.ShuttleForward}"
+                        AutomationProperties.Name="Shuttle forward"
+                        AutomationProperties.HelpText="Again for 2x, 4x, 8x." />
+
+                <Button Style="{StaticResource TransportButton}" Click="OnActionClick"
+                        Content="{StaticResource Icon.GoToEnd}"
+                        Tag="{x:Static input:EditorIntent.GoToEnd}"
+                        AutomationProperties.Name="Go to end" />
+
+                <!--
+                    Set apart from the seven navigation chips, because it is not one of them:
+                    those move the playhead, this changes only what you hear. OnModelChanged
+                    swaps its glyph.
+                -->
+                <Button x:Name="MuteButton" Style="{StaticResource TransportButton}"
+                        Click="OnActionClick"
+                        Margin="14,0,1,0"
+                        Content="{StaticResource Icon.Sound}"
+                        Tag="{x:Static input:EditorIntent.ToggleMute}"
+                        AutomationProperties.Name="Mute the preview"
+                        AutomationProperties.HelpText="Monitoring only — it does not change the exported file." />
+            </StackPanel>
+
+            <TextBlock x:Name="TransportLabel" Grid.Column="2" Style="{StaticResource StatusText}"
+                       HorizontalAlignment="Right" Margin="12,0,0,0" />
         </Grid>
 
         <local:TimelineControl x:Name="Timeline" Grid.Row="3" Margin="12,0,12,6" />
@@ -458,10 +570,12 @@
                                             <ContentControl Style="{StaticResource KeyCap}" Content="P" />
                                             <ContentControl Style="{StaticResource KeyCap}" Content="Ctrl + I"
                                                             Margin="6,0,0,0" />
+                                            <ContentControl Style="{StaticResource KeyCap}" Content="A"
+                                                            Margin="6,0,0,0" />
                                         </StackPanel>
                                         <TextBlock Text="Overlay a clip" Style="{StaticResource CardTitle}" />
                                         <TextBlock Style="{StaticResource CardBody}"
-                                                   Text="Picture-in-picture over the marked range. Ctrl+I imports a webcam take to use; with nothing imported, P puts the video on top of itself as a zoomed inset." />
+                                                   Text="Picture-in-picture over the marked range. Ctrl+I imports a webcam take to use; with nothing imported, P puts the video on top of itself as a zoomed inset. A lines the overlay up with the base track by its sound — for the same event filmed twice, that is the whole job." />
                                     </StackPanel>
                                 </Border>
                             </UniformGrid>
@@ -555,6 +669,19 @@
                                         </StackPanel>
                                         <TextBlock Style="{StaticResource CardBody}"
                                                    Text="Writes the edited video out to a file you name, picking the fast path automatically. Your original is never written to. Ctrl+E does the same." />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                            <Path Style="{StaticResource CardIcon}" Data="{StaticResource Icon.Clear}"
+                                                  Fill="#FF8B8B" Margin="0,0,8,0" />
+                                            <TextBlock Text="Close everything" Style="{StaticResource CardTitle}"
+                                                       Margin="0" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                        <TextBlock Style="{StaticResource CardBody}"
+                                                   Text="Empties the window and lets go of the video files, so you can move, rename or delete them without closing BertCut. Your edits are saved against each video on the way out and come back when you open it again. It asks first, and it has no key." />
                                     </StackPanel>
                                 </Border>
 

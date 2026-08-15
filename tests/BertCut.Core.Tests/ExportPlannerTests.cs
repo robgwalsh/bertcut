@@ -220,6 +220,32 @@ public class ExportPlannerTests
         Assert.Single(inputs);
     }
 
+    /// <remarks>
+    /// The export takes its audio from the base track and nothing else, on purpose: the case
+    /// overlays exist for is one event filmed twice, whose two tracks are near-identical, and
+    /// summing those combs rather than enriches. The preview plays the same base-only mix, so
+    /// this pins a decision that the picture cannot reveal has been broken.
+    /// </remarks>
+    [Fact]
+    public void An_overlay_contributes_no_audio_of_its_own()
+    {
+        var p = TimelineEdits.AddOverlay(
+            TestProjects.TwoSources(baseFrames: 600, overlayFrames: 300),
+            new OverlayClip(
+                new FrameRange(100, 400), SourceId: 2, SourceStartFrame: 0,
+                Dest: new RectI(900, 500, 320, 192), Muted: false));
+
+        var flat = RenderPlan.Build(p);
+        var spans = ExportPlanner.BuildAudioSpans(p, flat, _ => Index(), out var inputs);
+
+        // The overlay splits the video plan into three, and leaves the audio one unbroken
+        // run from the base source alone.
+        Assert.Equal(3, flat.Length);
+        Assert.Single(spans);
+        Assert.Single(inputs);
+        Assert.All(spans, s => Assert.Equal(0, s.InputIndex));
+    }
+
     [Fact]
     public void Crop_scales_back_to_the_output_size_with_no_pad_filter()
     {

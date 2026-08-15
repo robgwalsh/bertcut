@@ -1,9 +1,11 @@
+using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Windows.Threading;
+using BertCut.Core.Audio;
 using BertCut.Core.Edits;
 using BertCut.Core.Export;
 using BertCut.Core.Input;
@@ -13,6 +15,7 @@ using BertCut.Core.Session;
 using BertCut.Core.Time;
 using BertCut.Core.Timeline;
 using BertCut.Media;
+using BertCut.Media.Audio;
 using BertCut.Media.Decode;
 
 namespace BertCut.App;
@@ -31,11 +34,25 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     private readonly Dictionary<int, SourceIndex> _indices = [];
     private readonly DispatcherTimer _autosave;
     private readonly Stopwatch _clock = new();
+    private readonly Dispatcher _dispatcher = Dispatcher.CurrentDispatcher;
+    private readonly AudioPlayer _player;
 
-    private EditorDocument _document = new(Project.Empty(new OutputFormat(1280, 720, Rational.FromInt(30))));
+    /// <summary>
+    /// Each source's audio envelope, once it has been built.
+    /// </summary>
+    /// <remarks>
+    /// Concurrent because it is written by the background build and by the sync operation,
+    /// and read by the timeline's waveform on the UI thread. The <see cref="Project"/> those
+    /// threads read alongside it is immutable, so this dictionary is the only shared mutable
+    /// state in the audio path.
+    /// </remarks>
+    private readonly ConcurrentDictionary<int, AudioPeaks?> _peaks = new();
+
+    private EditorDocument _document = new(EmptyProject());
     private TimelineResolver _resolver;
     private PreviewEngine? _preview;
     private string? _sessionKey;
+    private bool _isMuted;
 
     private EditorMode _mode = EditorMode.Normal;
     private RectI _pendingRect;
@@ -47,10 +64,16 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     private string _status = "Press Ctrl+O to open a video.";
     private bool _isBusy;
 
-    public EditorViewModel(FfmpegRuntime runtime)
+    /// <param name="audioOutput">
+    /// Where preview audio goes. Defaults to the sound card, falling back to silence when
+    /// there is none. The harness passes a silent one, because a scripted run must not make
+    /// noise on the user's machine any more than it should put a window on their screen.
+    /// </param>
+    public EditorViewModel(FfmpegRuntime runtime, Func<IAudioOutput>? audioOutput = null)
     {
         _runtime = runtime;
         _resolver = new TimelineResolver(_document.Current);
+        _player = new AudioPlayer(audioOutput ?? AudioPlayer.DefaultOutput);
 
         _document.Changed += OnDocumentChanged;
 
@@ -64,6 +87,17 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
     /// <summary>Raised when the rendered frame changed and the surface should repaint.</summary>
     public event Action? FrameChanged;
+
+    /// <summary>
+    /// Raised when a source's audio envelope became available.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="PropertyChanged"/> because the waveform is expensive to
+    /// rebuild and the timeline repaints on every property change — including the playhead's,
+    /// sixty times a second during playback. This fires once per source, when there is
+    /// genuinely new geometry to build.
+    /// </remarks>
+    public event Action? PeaksChanged;
 
     /// <summary>
     /// Raised when opening a video brought last session's edits back with it, carrying the
@@ -157,6 +191,11 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         private set
         {
             _shuttleRate = value;
+
+            // Everything that changes the transport comes through here, so this is the one
+            // place the audio device has to be told about.
+            SyncAudioTransport();
+
             Notify();
             Notify(nameof(TransportText));
             Notify(nameof(TransportGlyph));
@@ -238,6 +277,100 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
     public SourceIndex IndexOf(int sourceId) => _indices[sourceId];
 
+    // ---- audio -------------------------------------------------------------------
+
+    /// <summary>
+    /// Silences the preview.
+    /// </summary>
+    /// <remarks>
+    /// Monitoring only: it does not touch the document and does not change what an export
+    /// contains. Nor does it stop the transport — the clock keeps running underneath, so
+    /// pressing this mid-playback does not make the picture jump.
+    /// </remarks>
+    public bool IsMuted
+    {
+        get => _isMuted;
+        set
+        {
+            if (_isMuted == value) return;
+
+            _isMuted = value;
+            _player.Muted = value;
+
+            Notify();
+            Notify(nameof(MuteGlyph));
+        }
+    }
+
+    /// <summary>Speaker or crossed-out speaker, for the transport row.</summary>
+    public string MuteGlyph => IsMuted ? "🔇" : "🔊";
+
+    /// <summary>A source's audio envelope, or null when it has none or it is still building.</summary>
+    public AudioPeaks? PeaksFor(int sourceId) =>
+        _peaks.TryGetValue(sourceId, out var peaks) ? peaks : null;
+
+    /// <summary>
+    /// Starts building a source's envelope, unless it is already built or under way.
+    /// </summary>
+    /// <remarks>
+    /// Off the UI thread and without <see cref="IsBusy"/>: this decodes a whole audio track,
+    /// which on a long recording is seconds, and nothing the user is doing needs to wait for
+    /// it. The waveform appears when it appears. Pressing the sync key <em>does</em> wait —
+    /// see <see cref="SyncOverlayAudio"/> — because at that point the answer is what was
+    /// asked for.
+    /// </remarks>
+    private void BeginPeaks(SourceMedia source)
+    {
+        if (!source.HasAudio)
+        {
+            // Recorded as "known to have none", so the sync key can say so immediately
+            // rather than waiting for a build that would find nothing.
+            _peaks[source.Id] = null;
+            return;
+        }
+
+        if (_peaks.ContainsKey(source.Id)) return;
+
+        var id = source.Id;
+        var path = source.Path;
+        var key = source.ContentKey;
+        var rate = Project.Output.SampleRate;
+
+        _ = Task.Run(() =>
+        {
+            var peaks = LoadPeaks(id, path, key, rate);
+            if (peaks is null) return;
+
+            _dispatcher.BeginInvoke(() => PeaksChanged?.Invoke());
+        });
+    }
+
+    /// <summary>
+    /// Builds or loads one source's envelope. Safe to call from any thread.
+    /// </summary>
+    /// <remarks>
+    /// A failure is cached as "no audio" rather than retried, so a file that cannot be
+    /// decoded does not have its whole track re-attempted on every keystroke.
+    /// </remarks>
+    private AudioPeaks? LoadPeaks(int sourceId, string path, string contentKey, int sampleRate)
+    {
+        if (_peaks.TryGetValue(sourceId, out var existing) && existing is not null) return existing;
+
+        AudioPeaks? peaks;
+
+        try
+        {
+            peaks = AudioPeaksCache.GetOrBuild(path, contentKey, sampleRate);
+        }
+        catch (Exception e) when (e is IOException or FfmpegDecodeException or InvalidOperationException)
+        {
+            peaks = null;
+        }
+
+        _peaks[sourceId] = peaks;
+        return peaks;
+    }
+
     // ---- media -------------------------------------------------------------------
 
     public async Task OpenAsync(string path)
@@ -248,7 +381,6 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         try
         {
             var probe = await new MediaProber(_runtime).ProbeAsync(path);
-            _indices[1] = probe.Index;
 
             var output = new OutputFormat(probe.Media.Width, probe.Media.Height, probe.Media.FrameRate);
             var fresh = TimelineEdits.ImportSource(Project.Empty(output), probe.Media);
@@ -264,6 +396,23 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
             _document.Changed -= OnDocumentChanged;
             _document = new EditorDocument(fresh, "Open video");
             _document.Changed += OnDocumentChanged;
+
+            // Indices are keyed by source id and ids start again at 1 with every open, so
+            // anything left from the last video is a keyframe table filed under a number
+            // this project is about to reuse. The restore below only probes ids it does not
+            // already have, which is exactly how a stale one gets adopted: an overlay that
+            // was source 2 in the previous video would seek this video's source 2 by the
+            // wrong timestamps, silently and with no error to show for it.
+            //
+            // Cleared here rather than beside the probe so that a probe that throws leaves
+            // the video already open still working.
+            _indices.Clear();
+            _indices[1] = probe.Index;
+
+            // Envelopes are keyed by source id for exactly the same reason the indices are,
+            // and go stale in exactly the same way.
+            _player.Stop();
+            _peaks.Clear();
 
             _preview?.Dispose();
             _preview = new PreviewEngine(
@@ -289,6 +438,8 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
             // a zoomed inset of one moment shown over the full view.
             OverlaySourceId = _document.Current.Sources[0].Id;
             Notify(nameof(OverlaySourceName));
+
+            foreach (var source in _document.Current.Sources) BeginPeaks(source);
 
             OnDocumentChanged(_document.Current);
 
@@ -334,6 +485,8 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
             Apply($"Import {Path.GetFileName(path)}",
                 p => TimelineEdits.ImportSource(p, probe.Media, appendToBase: false));
+
+            BeginPeaks(Project.RequireSource(nextId));
 
             OverlaySourceId = nextId;
             Notify(nameof(OverlaySourceName));
@@ -382,6 +535,8 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
             Apply($"Add {Path.GetFileName(path)}",
                 p => TimelineEdits.ImportSource(p, probe.Media, appendToBase: true));
+
+            BeginPeaks(Project.RequireSource(nextId));
 
             if (DurationFrames == join)
             {
@@ -441,9 +596,16 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
         var fresh = TimelineEdits.ImportSource(Project.Empty(output), original);
 
-        // ImportSource renumbers from scratch, so the index has to follow the new id.
+        // ImportSource renumbers from scratch, so the index has to follow the new id — and
+        // so does the envelope, for the same reason: a stale one filed under a number this
+        // project is about to reuse would draw the wrong waveform and sync against it.
         var id = fresh.Sources[0].Id;
         if (!_indices.ContainsKey(id)) _indices[id] = _indices[original.Id];
+
+        var keptPeaks = PeaksFor(original.Id);
+        _player.Stop();
+        _peaks.Clear();
+        if (keptPeaks is not null) _peaks[id] = keptPeaks;
 
         _document.Replace("Reset everything", fresh);
 
@@ -464,6 +626,97 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
         Status = "Reset to the original video — Ctrl+Z to undo";
     }
+
+    /// <summary>
+    /// Empties the editor and lets go of every file it had open.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A different thing from <see cref="ResetAll"/>, which is an edit: that one goes on the
+    /// undo stack and leaves the video open in front of you. This ends the session. The
+    /// document, the probe indices, the decoders and the handles behind them all go, and
+    /// the window is back to where it was before anything was opened — so there is nothing
+    /// left to undo it in, and the prompt in front of this one is doing real work.
+    /// </para>
+    /// <para>
+    /// Disposing the preview is the part that actually releases the files. It keeps a
+    /// decoder per source and each of those holds its video open for as long as it lives,
+    /// which is what stops the user renaming or deleting a file they have finished with.
+    /// Dropping the indices matters as much: they are keyed by a source id that the next
+    /// video will reuse from 1, so a stale one would quietly hand the new project the old
+    /// video's keyframe table.
+    /// </para>
+    /// <para>
+    /// The session is flushed on the way out rather than thrown away. Edits autosave
+    /// against the video's content key and that is this app's entire persistence story;
+    /// closing a video says you are done looking at it, not that the afternoon's cuts
+    /// should evaporate. Open the same file again and they come back.
+    /// </para>
+    /// </remarks>
+    public void CloseAll()
+    {
+        // Before anything else: SaveSession gives up the moment the project is empty, so a
+        // flush after the teardown would silently write nothing.
+        FlushSession();
+
+        // Stop the transport before the decoders go, so no tick is mid-render when they do,
+        // and leave placement mode so the rectangle editor lets go of the mouse. The audio
+        // player holds decoders of its own on a device thread, and stopping it joins that
+        // thread — without which the file would stay open after the editor said it was closed.
+        ShuttleRate = 0;
+        _player.Stop();
+        _clock.Reset();
+        Mode = EditorMode.Normal;
+
+        _preview?.Dispose();
+        _preview = null;
+
+        _peaks.Clear();
+
+        _indices.Clear();
+        _sessionKey = null;
+
+        _document.Changed -= OnDocumentChanged;
+        _document = new EditorDocument(EmptyProject());
+        _document.Changed += OnDocumentChanged;
+
+        _playhead = 0;
+        MarkIn = null;
+        MarkOut = null;
+
+        // The field rather than the property: the setter renders, and there is nothing left
+        // to render with.
+        _pendingRect = default;
+        PendingRange = default;
+        PendingOverlaySourceId = 0;
+        PendingOverlaySourceStart = 0;
+        OverlaySourceId = 0;
+
+        // Rebuilds the resolver and tells everything bound to this that the project is
+        // empty — which is also what puts the timeline and the placement layer back.
+        OnDocumentChanged(_document.Current);
+
+        // That last call armed the autosave, as every document change does. There is
+        // nothing to save and no key to save it under, so disarm it rather than leave a
+        // timer to fire into a null session key three quarters of a second from now.
+        _autosave.Stop();
+
+        Notify(nameof(OverlaySourceName));
+        Notify(nameof(Playhead));
+
+        Status = "Closed — press Ctrl+O to open a video.";
+    }
+
+    /// <summary>
+    /// The project an editor with nothing open holds.
+    /// </summary>
+    /// <remarks>
+    /// 720p30 is a placeholder and is replaced wholesale by the first video's own format
+    /// the moment one is opened. It exists so that an empty editor still has a frame rate
+    /// to format a timecode against.
+    /// </remarks>
+    private static Project EmptyProject() =>
+        Project.Empty(new OutputFormat(1280, 720, Rational.FromInt(30)));
 
     private static string Describe(SourceMedia media)
     {
@@ -526,6 +779,9 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
             case EditorIntent.TrimOverlayBack: TrimOverlay(-1); break;
             case EditorIntent.TrimOverlayForward: TrimOverlay(1); break;
+            case EditorIntent.SyncOverlayAudio: SyncOverlayAudio(); break;
+
+            case EditorIntent.ToggleMute: IsMuted = !IsMuted; Status = IsMuted ? "Muted" : "Unmuted"; break;
 
             case EditorIntent.ToggleOverlayMute: ToggleOverlayMute(); break;
 
@@ -720,6 +976,143 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         RenderCurrentFrame();
     }
 
+    /// <summary>
+    /// Slides the overlay's content until its sound matches the base track underneath it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// What Alt+←/→ does one frame at a time, done in one press. The case it exists for is
+    /// one recording holding the same event from two angles: mark the stretch of the first
+    /// angle, overlay the second on top of it, and this finds the alignment by correlating
+    /// what the two of them heard.
+    /// </para>
+    /// <para>
+    /// Runs off the UI thread — it may have to decode a whole audio track to build an
+    /// envelope — and reports through <see cref="IsBusy"/>, which is also how a harness run
+    /// knows to wait for it. Unlike the background build that starts on import, this one
+    /// waits: the user pressed a key to get an answer.
+    /// </para>
+    /// <para>
+    /// A low-confidence result changes nothing. Silently jumping an overlay to the wrong
+    /// place is worse than saying so, because the user's next move is to check the alignment
+    /// by eye either way — and if it moved, they have lost where it was.
+    /// </para>
+    /// </remarks>
+    private void SyncOverlayAudio()
+    {
+        var placing = Mode == EditorMode.Overlay;
+
+        var range = placing ? PendingRange : default;
+        var sourceId = placing ? PendingOverlaySourceId : 0;
+        var current = placing ? PendingOverlaySourceStart : 0;
+        var index = -1;
+
+        if (!placing)
+        {
+            for (var i = 0; i < Project.Overlays.Length; i++)
+                if (Project.Overlays[i].Range.Contains(Playhead))
+                {
+                    index = i;
+                    range = Project.Overlays[i].Range;
+                    sourceId = Project.Overlays[i].SourceId;
+                    current = Project.Overlays[i].SourceStartFrame;
+                    break;
+                }
+
+            if (index < 0)
+            {
+                Status = "No overlay under the playhead to sync.";
+                return;
+            }
+        }
+
+        if (range.IsEmpty)
+        {
+            Status = "Mark the range to overlay with I and O first.";
+            return;
+        }
+
+        ShuttleRate = 0;
+        IsBusy = true;
+        Status = "Matching the audio...";
+
+        // Snapshotted because the background task reads them: Project is immutable and safe
+        // to hand across, and the index table is not written again until the next open.
+        var project = Project;
+        var indices = new Dictionary<int, SourceIndex>(_indices);
+        var rate = project.Output.SampleRate;
+
+        _ = Task.Run(() =>
+        {
+            foreach (var source in project.Sources)
+                LoadPeaks(source.Id, source.Path, source.ContentKey, rate);
+
+            return OverlaySync.Solve(
+                project, range, sourceId, current,
+                id => indices[id],
+                PeaksFor);
+        })
+        .ContinueWith(
+            task => ApplySync(task, placing, index, current, range),
+            CancellationToken.None,
+            TaskContinuationOptions.None,
+            TaskScheduler.FromCurrentSynchronizationContext());
+    }
+
+    private void ApplySync(
+        Task<SyncOutcome> task, bool placing, int index, long current, FrameRange range)
+    {
+        IsBusy = false;
+
+        if (task.IsFaulted)
+        {
+            Status = $"Could not match the audio: {task.Exception?.GetBaseException().Message}";
+            return;
+        }
+
+        var outcome = task.Result;
+
+        if (!outcome.Succeeded)
+        {
+            Status = outcome.Failure switch
+            {
+                SyncFailure.NoAudio => "Sync needs sound: one of these clips has no audio track.",
+                SyncFailure.NotAnalysed => "Still analysing the audio — try again in a moment.",
+                SyncFailure.RangeTooShort =>
+                    $"Mark at least {OverlaySync.MinimumReferenceSeconds:0.##} seconds to match against.",
+                _ => "No confident audio match — Alt+←/→ to sync by hand.",
+            };
+
+            return;
+        }
+
+        var moved = outcome.SourceStartFrame - current;
+        var milliseconds = moved / Project.Output.FrameRate.Approx * 1000;
+
+        // The runner-up matters as much as the winner: two offsets that score alike mean the
+        // recording says the same thing twice, and the user should look before trusting it.
+        var decisive = outcome.Confidence - outcome.Runner > 0.15
+            ? ""
+            : " — but another position matches nearly as well, so check it";
+
+        if (placing)
+        {
+            PendingOverlaySourceStart = outcome.SourceStartFrame;
+            RenderCurrentFrame();
+        }
+        else
+        {
+            var target = outcome.SourceStartFrame;
+            var at = index;
+            Apply("Sync overlay", p => TimelineEdits.SetOverlaySourceStart(p, at, target));
+        }
+
+        Status = moved == 0
+            ? $"Already in sync (confidence {outcome.Confidence:0.00}){decisive}"
+            : $"Synced — moved {Math.Abs(moved)} frames {(moved > 0 ? "later" : "earlier")} " +
+              $"({Math.Abs(milliseconds):0} ms), confidence {outcome.Confidence:0.00}{decisive}";
+    }
+
     private void ToggleOverlayMute()
     {
         for (var i = 0; i < Project.Overlays.Length; i++)
@@ -805,25 +1198,94 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     {
         _playbackStartFrame = Playhead;
         _clock.Restart();
+
+        // Audio needs nothing here: every route into 1x forward goes through the ShuttleRate
+        // setter, which starts the device at the playhead of the moment, and nothing moves
+        // the playhead without first setting the rate to zero.
+    }
+
+    /// <summary>
+    /// Starts or stops the audio device to match the transport.
+    /// </summary>
+    /// <remarks>
+    /// Sound only at 1x forward. Reverse and 2x-8x leave the device stopped and fall back to
+    /// the stopwatch below: pitch-preserving resampling for an 8x scrub is a lot of machinery
+    /// for something nobody listens to, and the transport glyph already says you are off
+    /// normal speed.
+    /// </remarks>
+    private void SyncAudioTransport()
+    {
+        var wanted = _shuttleRate == 1 && HasMedia;
+
+        if (wanted == _player.IsRunning) return;
+
+        if (!wanted)
+        {
+            _player.Stop();
+            return;
+        }
+
+        StartAudio();
+    }
+
+    /// <summary>
+    /// Re-points the device at the edited timeline after the document changed under it.
+    /// </summary>
+    /// <remarks>
+    /// The player holds the <see cref="Project"/> it was started with, which is right —
+    /// immutability is what lets the device thread read it without a lock — but it means an
+    /// undo or a redo during playback would keep playing the old edit. Rare enough that
+    /// re-opening the device is the cheap answer.
+    /// </remarks>
+    private void RestartAudioIfPlaying()
+    {
+        if (!_player.IsRunning) return;
+
+        _player.Stop();
+        StartAudio();
+    }
+
+    private void StartAudio()
+    {
+        _player.Muted = IsMuted;
+
+        try
+        {
+            _player.Start(Project, IndexOf, _playhead);
+        }
+        catch (Exception e) when (e is InvalidOperationException or IOException or FfmpegDecodeException)
+        {
+            // A device that will not open must not stop the timeline playing; the stopwatch
+            // below takes over on its own, because the player simply is not running.
+            Status = $"No sound: {e.Message}";
+        }
     }
 
     /// <summary>
     /// Advances the playhead to match elapsed time. Called from the composition tick.
     /// </summary>
     /// <remarks>
-    /// The position is computed from elapsed time rather than incremented per tick, so a
-    /// slow frame causes a dropped frame instead of playback drifting behind wall clock.
-    /// Once audio is wired in, this clock is replaced by the audio device's own position.
+    /// <para>
+    /// While audio is playing the position comes from the device rather than from a
+    /// stopwatch, so the picture follows the sound. That is the only ordering that stays
+    /// right over a long take: sound cannot be nudged a frame to catch up without an audible
+    /// click, and a video frame can be dropped without anyone noticing.
+    /// </para>
+    /// <para>
+    /// Otherwise — reverse, shuttle, or no audio at all — the position is computed from
+    /// elapsed time rather than incremented per tick, so a slow frame causes a dropped frame
+    /// instead of playback drifting behind wall clock.
+    /// </para>
     /// </remarks>
     public void Tick()
     {
         if (ShuttleRate == 0 || !HasMedia) return;
 
-        var elapsed = _clock.Elapsed.TotalSeconds;
-        var advance = (long)(elapsed * Project.Output.FrameRate.Approx * ShuttleRate);
-        var target = _playbackStartFrame + advance;
+        var target = _player.IsRunning
+            ? _player.PositionFrames
+            : _playbackStartFrame + (long)(_clock.Elapsed.TotalSeconds * Project.Output.FrameRate.Approx * ShuttleRate);
 
-        if (target >= DurationFrames)
+        if (target >= DurationFrames || (_player.IsRunning && _player.HasFinished))
         {
             Playhead = DurationFrames - 1;
             ShuttleRate = 0;
@@ -911,6 +1373,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
             _playhead = Math.Max(0, project.DurationFrames - 1);
 
         _preview?.SetOutput(project.Output);
+        RestartAudioIfPlaying();
 
         Notify(nameof(Project));
         Notify(nameof(DurationFrames));
@@ -959,6 +1422,9 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     public void Dispose()
     {
         _autosave.Stop();
+
+        // Before the preview, for the same reason as in CloseAll: this one owns a thread.
+        _player.Dispose();
         _preview?.Dispose();
     }
 }

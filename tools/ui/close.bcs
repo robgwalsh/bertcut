@@ -1,0 +1,38 @@
+# Closing the workspace: the window empties, and the videos are let go of.
+#
+# The point of this script is the two assert-unlocked lines. They take each file
+# exclusively, which only succeeds once every decoder holding it has been disposed —
+# so this is the test that the close button does what its tooltip promises, rather
+# than merely looking as though it did.
+
+sample a.mp4 4
+sample b.mp4 3
+
+open a.mp4
+append b.mp4
+goto 40
+assert-has-media
+
+# Still open, so both files are still held. (Belt and braces: if this ever stops
+# being true, the assertions after the close stop proving anything.)
+shot 01-before-close
+
+close
+
+assert-no-media
+assert-status Closed
+assert-visible EmptyHint
+assert-frame 0
+
+assert-unlocked a.mp4
+assert-unlocked b.mp4
+
+shot 02-after-close
+
+# And the editor still works afterwards — a close is not a wedge.
+open b.mp4
+assert-has-media
+goto 20
+assert-frame 20
+shot 03-reopened
+state

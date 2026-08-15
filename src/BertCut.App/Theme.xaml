@@ -93,6 +93,11 @@
 
     <Geometry x:Key="Icon.Add">M2 5 H22 V19 H2 Z M4 7 H20 V17 H4 Z M11 9 H13 V11 H16 V13 H13 V15 H11 V13 H8 V11 H11 Z</Geometry>
 
+    <!-- The same screen with a cross in it instead of a plus. Deliberately the Add icon's
+         twin, because it is the Add icon's opposite and the two sit next to each other:
+         one puts a video in this frame, the other empties it. -->
+    <Geometry x:Key="Icon.Clear">M2 5 H22 V19 H2 Z M4 7 H20 V17 H4 Z M9.8 8.4 L12 10.6 L14.2 8.4 L15.6 9.8 L13.4 12 L15.6 14.2 L14.2 15.6 L12 13.4 L9.8 15.6 L8.4 14.2 L10.6 12 L8.4 9.8 Z</Geometry>
+
     <!--
         The floppy disk, drawn the way thirty years of save buttons have drawn it: clipped
         top-right corner, shutter above, label below. Nobody under forty has held one and
@@ -112,6 +117,43 @@
     <Geometry x:Key="Icon.Settings">F1 M3 5 H21 V7 H3 Z M14 3 H17 V9 H14 Z M3 11 H21 V13 H3 Z M6 9 H9 V15 H6 Z M3 17 H21 V19 H3 Z M15 15 H18 V21 H15 Z</Geometry>
     <Geometry x:Key="Icon.Help">F1 M12 3 C9.2 3 7 4.4 6.3 7 L9.2 7.9 C9.6 6.5 10.6 5.7 12 5.7 C13.5 5.7 14.6 6.6 14.6 7.9 C14.6 9.2 13.8 9.8 12.4 10.7 C10.8 11.7 10.4 12.8 10.5 14.8 H13.4 C13.4 13.5 13.7 13 15 12.1 C16.7 10.9 17.7 9.9 17.7 7.9 C17.7 5 15.3 3 12 3 Z M10.4 16.6 H13.6 V19.8 H10.4 Z</Geometry>
     <Geometry x:Key="Icon.Close">M5.5 4 L12 10.5 L18.5 4 L20 5.5 L13.5 12 L20 18.5 L18.5 20 L12 13.5 L5.5 20 L4 18.5 L10.5 12 L4 5.5 Z</Geometry>
+
+    <!--
+        The transport set, drawn as a tape deck: the number of triangles is the meaning.
+        One is a single frame, two is a speed, and a bar is a wall to stop against. That
+        gives seven silhouettes that stay apart at twelve pixels, which the obvious scheme —
+        one triangle for step, one for play — does not.
+
+        Every subpath is spaced at least a pixel from its neighbour in the 24-unit box, so
+        the double arrows read as two arrows rather than merging into one at the seam.
+
+        There is no pause glyph: pausing and stopping are the same operation in this editor
+        — both park the playhead where it is — so the middle button shows whichever of the
+        two is the one you can actually press.
+    -->
+    <Geometry x:Key="Icon.GoToStart">M2 5 H4 V19 H2 Z M13 5 L5.5 12 L13 19 Z M22 5 L14.5 12 L22 19 Z</Geometry>
+    <Geometry x:Key="Icon.ShuttleReverse">M11.5 5 L3 12 L11.5 19 Z M21 5 L12.5 12 L21 19 Z</Geometry>
+    <Geometry x:Key="Icon.StepBack">M14.5 5 L5.5 12 L14.5 19 Z M16 5 H18.5 V19 H16 Z</Geometry>
+
+    <Geometry x:Key="Icon.Play">M6.5 4 L19.5 12 L6.5 20 Z</Geometry>
+    <Geometry x:Key="Icon.Stop">M6 6 H18 V18 H6 Z</Geometry>
+
+    <!--
+        A speaker cone with two waves, and the same cone with a cross beside it. The cone is
+        identical in both, so toggling the button does not make it appear to jump.
+
+        Every figure is closed: the icon templates fill the glyph and never stroke it, so an
+        open arc would come back as a sliver or as nothing at all. The waves are therefore
+        crescents — an outer arc out, an inner arc back — rather than stroked curves. 'F1'
+        selects the nonzero fill rule so the crossing bars of the mute glyph do not punch a
+        hole in each other.
+    -->
+    <Geometry x:Key="Icon.Sound">F1 M4 9.5 H7.5 L12 5.5 V18.5 L7.5 14.5 H4 Z M15.54 7.79 A5.5 5.5 0 0 1 15.54 16.21 L14.76 15.29 A4.3 4.3 0 0 0 14.76 8.71 Z M17.27 5.72 A8.2 8.2 0 0 1 17.27 18.28 L16.5 17.36 A7 7 0 0 0 16.5 6.64 Z</Geometry>
+    <Geometry x:Key="Icon.Muted">F1 M4 9.5 H7.5 L12 5.5 V18.5 L7.5 14.5 H4 Z M14.9 10.4 L15.9 9.4 L20.1 13.6 L19.1 14.6 Z M19.1 9.4 L20.1 10.4 L15.9 14.6 L14.9 13.6 Z</Geometry>
+
+    <Geometry x:Key="Icon.StepForward">M9.5 5 L18.5 12 L9.5 19 Z M5.5 5 H8 V19 H5.5 Z</Geometry>
+    <Geometry x:Key="Icon.ShuttleForward">M12.5 5 L21 12 L12.5 19 Z M3 5 L11.5 12 L3 19 Z</Geometry>
+    <Geometry x:Key="Icon.GoToEnd">M22 5 H20 V19 H22 Z M11 5 L18.5 12 L11 19 Z M2 5 L9.5 12 L2 19 Z</Geometry>
 
     <!-- The same icons at prose size, for the cards on the help sheet. Scaled by layout
          transform rather than redrawn, so the sheet cannot show an icon the toolbar
@@ -326,6 +368,97 @@
         <Setter Property="Foreground" Value="#7C8998" />
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderBrush" Value="Transparent" />
+    </Style>
+
+    <!--
+        The playback controls, which live in the timecode row rather than the toolbar.
+
+        That row is exactly as tall as the timecode in it — 18 device pixels — and these
+        buttons have to fit inside that without pushing the preview up, so the height is not
+        a free parameter: 18px, and a 12.5px glyph rather than the toolbar's 17px. It is
+        small on purpose. The keys are the fast way to do all of this; the buttons are for
+        the hand that is already on the mouse.
+
+        Borderless, and margined symmetrically rather than trailing-only, because the whole
+        cluster is centred in the row and a one-sided gutter would put it half a pixel off.
+        Seven bordered chips at this size would read as a fence; the hover fill is what says
+        they are clickable, and it lights the glyph as well as the ground because at this
+        size the ground alone is not much of a signal.
+    -->
+    <Style x:Key="TransportButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
+        <Setter Property="Width" Value="21" />
+        <Setter Property="Height" Value="18" />
+        <Setter Property="Margin" Value="1,0" />
+        <Setter Property="Foreground" Value="#9AA8B9" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Chrome" CornerRadius="4"
+                            Background="{TemplateBinding Background}">
+                        <Viewbox Width="12.5" Height="12.5"
+                                 HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <Path x:Name="Glyph"
+                                  Width="24" Height="24" Stretch="None"
+                                  Data="{TemplateBinding Content}"
+                                  Fill="{TemplateBinding Foreground}" />
+                        </Viewbox>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="#2E3742" />
+                            <Setter TargetName="Glyph" Property="Fill" Value="#EAF1F9" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="#171C23" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!--
+        The one in the middle. Wider than its neighbours and carrying a glyph half again
+        their size, because it is the button being reached for nearly every time the mouse
+        comes to this row at all — and because the six around it are the ones you can afford
+        to miss.
+
+        Height is the exception it cannot have: the row is 18px and that is the whole
+        constraint this cluster was built under, so this button grows sideways instead.
+
+        Its colour comes from the button rather than from here — green to start, red to
+        stop — so the hover state deliberately does not touch the glyph. Lighting it to the
+        usual near-white would throw away the one thing that tells the two apart at a
+        glance. Note this is the opposite assignment to the status bar's transport glyph,
+        which is red when stopped and green when moving: that reports a state, and these
+        offer an action.
+    -->
+    <Style x:Key="TransportPrimaryButton" TargetType="Button" BasedOn="{StaticResource TransportButton}">
+        <Setter Property="Width" Value="27" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Chrome" CornerRadius="4"
+                            Background="{TemplateBinding Background}">
+                        <Viewbox Width="16" Height="16"
+                                 HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <Path Width="24" Height="24" Stretch="None"
+                                  Data="{TemplateBinding Content}"
+                                  Fill="{TemplateBinding Foreground}" />
+                        </Viewbox>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="#2E3742" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="#171C23" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
     </Style>
 
     <!-- ==== tooltips ================================================================= -->

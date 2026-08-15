@@ -18,16 +18,17 @@ dotnet run --project src\BertCut.App -- "C:\recordings\demo.mp4"
 ## Layout
 
 ```
-src/BertCut.Core     timeline model, edits, export planner
-src/BertCut.Media    ffmpeg decode, probing, preview compositing, export process driving
+src/BertCut.Core     timeline model, edits, export planner, audio correlation
+src/BertCut.Media    ffmpeg decode, probing, preview compositing, audio playback,
+                     export process driving
 src/BertCut.App      WPF shell, timeline, settings screen
-tests/               158 tests; the ffmpeg-dependent ones skip if it isn't installed
+tests/               206 tests; the ffmpeg-dependent ones skip if it isn't installed
 ```
 
 `Core` deliberately depends on nothing but the BCL, so ripple-delete arithmetic, the
 timeline↔source mapping, and every ffmpeg argument are testable headlessly.
 
-## Two things worth knowing
+## Three things worth knowing
 
 **Variable frame rate is handled up front.** OBS, ShareX, and the Windows capture tools
 routinely emit VFR, where a frame's timestamp is *not* `index / fps`. On import a single
@@ -38,6 +39,14 @@ above the decoder is an array lookup and VFR stops existing as a concept.
 that the ffmpeg argument builder consumes; `TimelineResolver` answers the same question
 per-frame for the compositor. A property test asserts the two agree on every frame of
 randomly generated projects — that test is the WYSIWYG guarantee.
+
+**Overlays can line themselves up by ear.** Film an event from two angles, put both takes in
+one recording, cut the second angle out and drop it over the first as a picture-in-picture:
+press `A` and it slides into sync by correlating what the two cameras heard. The subtlety is
+that both angles usually live in the *same file*, so the base window matches itself at a
+perfect score as well as matching the real second angle — the useless answer outranks the
+right one. `AudioSync` refuses any offset overlapping the region the reference came from,
+which is the whole difference between the feature working and appearing to do nothing.
 
 ## Building
 
@@ -64,7 +73,12 @@ It opens a synthesised clip, marks a range, ripples it away, and writes a PNG at
 each one printed as `SHOT <path>`. Scripts are a line per command (`open`, `key I`, `goto 90`,
 `shot`, `state`, `assert-status …`); `--help` lists them. Keystrokes are resolved through the
 real key map and dispatched through the same entry point the toolbar uses, so no operating
-system input is synthesised and nothing competes with the desktop.
+system input is synthesised and nothing competes with the desktop. `tools/ui/sync.bcs` does
+the same for the two-angle overlay sync.
+
+A run is also silent: preview audio goes to a sink that consumes it at real time and discards
+it, so the whole playback path runs without anything coming out of the speakers. `--audio`
+opts in.
 
 Because the app restores a session by content key, each run is given its own state directory
 through `BERTCUT_STATE_DIR` and cannot disturb `%LOCALAPPDATA%\BertCut`.

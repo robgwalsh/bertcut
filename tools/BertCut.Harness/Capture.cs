@@ -31,7 +31,7 @@ internal static class Capture
                 $"{Describe(element)} has no size to capture ({width}x{height}); it is probably collapsed.");
 
         var target = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
-        target.Render(element);
+        target.Render(AtOrigin(element, width, height));
 
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(target));
@@ -43,6 +43,33 @@ internal static class Capture
         encoder.Save(stream);
 
         return (width, height);
+    }
+
+    /// <summary>
+    /// Re-hosts an element at the origin so its picture is not shifted by where it sits.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="RenderTargetBitmap.Render"/> applies the visual's offset within its parent,
+    /// so rendering a child straight into a bitmap of that child's size draws it at its
+    /// window coordinates — the timeline strip, six hundred pixels down, lands entirely
+    /// outside the bitmap and comes back blank, and everything else comes back with a margin
+    /// on two sides and its far edges cropped. Painting it through a
+    /// <see cref="VisualBrush"/> normalises that away; the brush samples the live visual, so
+    /// this is still a software re-render of the real tree rather than a copy of anything.
+    /// </remarks>
+    private static Visual AtOrigin(FrameworkElement element, int width, int height)
+    {
+        var visual = new DrawingVisual();
+
+        using (var context = visual.RenderOpen())
+        {
+            context.DrawRectangle(
+                new VisualBrush(element) { Stretch = Stretch.None, AlignmentX = AlignmentX.Left, AlignmentY = AlignmentY.Top },
+                null,
+                new Rect(0, 0, width, height));
+        }
+
+        return visual;
     }
 
     /// <summary>

@@ -1,8 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!-- Windows-targeted because this project will also hold the Direct3D 11 compositor,
-         the D3DImage presenter, and WASAPI audio output. The ffprobe/ffmpeg process
+    <!-- Windows-targeted because this project holds WASAPI audio output, and will also hold
+         the Direct3D 11 compositor and the D3DImage presenter. The ffprobe/ffmpeg process
          wrappers below are platform-neutral, but keeping one media project avoids a
          boundary that would have to be undone later. -->
     <TargetFramework>net10.0-windows</TargetFramework>
@@ -21,6 +21,11 @@
 
   <ItemGroup>
     <PackageReference Include="FFmpeg.AutoGen.Bindings.DynamicallyLoaded" Version="8.1.0" />
+
+    <!-- Shared-mode WASAPI output, and the device position that the playback clock is
+         derived from. Only AudioPlayer's WasapiAudioOutput touches it; everything above
+         talks to IAudioOutput, which is also what lets the harness run silently. -->
+    <PackageReference Include="NAudio.Wasapi" Version="3.0.0" />
   </ItemGroup>
 
 </Project>

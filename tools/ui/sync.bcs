@@ -1,0 +1,62 @@
+# Audio sync, end to end, in a window the user never sees and through a sound device that
+# never reaches their speakers.
+#
+# The fixture is one recording holding the same event from two angles played back to back —
+# the shape this feature exists for. The first six seconds are the first angle; the second
+# six are the same event again, quieter and with its own noise.
+
+sample-angles angles.mp4 6
+open angles.mp4
+assert-has-media
+
+# The envelope is built off the UI thread on open, so give it a moment before asking for a
+# picture of the waveform. Pressing the sync key would wait on its own.
+settle 1500
+shot 01-waveform
+
+# Mark half a second to five and a half seconds of the first angle: frames 15 to 165.
+goto 15
+key I
+goto 165
+key O
+shot 02-marked
+
+# Place the overlay. It comes from the same file, so it starts life showing the very frames
+# it is sitting on top of — source frame 15, the identity match the correlation has to refuse.
+key P
+assert-overlay-source-start 15
+shot 03-placed
+
+# Sync. The same instant of the second angle is six seconds later, which at 30 fps is source
+# frame 195. Bounded rather than exact: the answer is good to about a frame.
+key A
+assert-status Synced
+assert-overlay-source-start 193 197
+shot 04-synced
+
+# Running it again must not walk the overlay somewhere else that matches equally well.
+key A
+assert-overlay-source-start 193 197
+
+key Enter
+goto 90
+shot 05-committed
+state
+
+# Muting is monitoring only: it changes what is heard, never the document.
+key M
+assert-muted
+assert-status Muted
+key M
+assert-unmuted
+
+# Playback with sound: the playhead follows the audio device's position rather than a
+# stopwatch. 'sleep' blocks this thread, so the composition tick that normally drives Tick
+# cannot fire — 'tick' is what stands in for it. Bounded, because it is still a real clock.
+goto 0
+play
+sleep 600
+tick
+stop
+assert-frame-between 5 40
+state
