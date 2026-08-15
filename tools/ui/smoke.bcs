@@ -1,0 +1,38 @@
+# The canonical harness run: open a clip, mark a range, ripple it away, and look at the
+# editor before and after. Everything here happens in a window the user never sees.
+
+sample clip.mp4 6
+open clip.mp4
+assert-has-media
+assert-frame 0
+shot 01-opened
+
+# Mark a second out of the middle. testsrc2 prints its own frame number, so the preview in
+# each capture says which frame the playhead is really on.
+goto 30
+key I
+goto 90
+key O
+shot 02-marked
+
+key X
+assert-status ripple
+shot 03-after-cut
+dump-preview 04-frame.png
+
+key Ctrl+Z
+assert-status Undo
+
+# The two overlays, settled so a capture is their finished state rather than a sample of a
+# fade. Toggled off again afterwards, so the state line at the end describes the editor.
+intent ToggleHelp
+assert-visible HelpOverlay
+shot 05-help
+intent ToggleHelp
+
+intent ToggleSettings
+assert-visible SettingsOverlay
+shot 06-settings
+intent ToggleSettings
+
+state

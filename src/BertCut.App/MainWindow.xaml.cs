@@ -115,9 +115,10 @@ public partial class MainWindow : Window
     /// <remarks>
     /// The single place the two halves of the app meet. A button that called the view model
     /// directly would be a second implementation of the same action, free to drift from the
-    /// key that is supposed to be its equal.
+    /// key that is supposed to be its equal. The UI harness enters here too, for the same
+    /// reason: a test that reached past this would be testing something the user cannot do.
     /// </remarks>
-    private void Invoke(EditorIntent intent)
+    internal void Invoke(EditorIntent intent)
     {
         switch (intent)
         {
@@ -351,6 +352,49 @@ public partial class MainWindow : Window
     private static Duration Ms(int milliseconds) => new(TimeSpan.FromMilliseconds(milliseconds));
 
     private static TranslateTransform Lift(UIElement element) => (TranslateTransform)element.RenderTransform;
+
+    // ---- harness ---------------------------------------------------------------------
+
+    /// <summary>Editor state, for a harness driving this window.</summary>
+    internal EditorViewModel Model => _model;
+
+    /// <summary>
+    /// The keyboard as this window currently has it.
+    /// </summary>
+    /// <remarks>
+    /// Exposed rather than reloaded from disk so a harness pressing a key resolves it through
+    /// the same map the window is dispatching with, including anything the Controls page
+    /// changed a moment ago.
+    /// </remarks>
+    internal KeyBindings Bindings => _keys;
+
+    /// <summary>
+    /// Jumps every entrance animation to its finished state.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Screenshots are otherwise a sample of a 260 ms cubic ease, and two runs of the same
+    /// script disagree about the opacity of the help sheet. Removing an animation reverts the
+    /// property to its base value, which for all of these is exactly the value the storyboard
+    /// was travelling towards.
+    /// </para>
+    /// <para>
+    /// This settles a fade rather than finishing it: cancelling the toast's fade-out skips
+    /// the <c>Completed</c> handler that collapses it, so this is a thing to call before
+    /// capturing, never a way to dismiss the notice.
+    /// </para>
+    /// </remarks>
+    internal void SettleAnimations()
+    {
+        HelpCard.BeginAnimation(OpacityProperty, null);
+        Lift(HelpCard).BeginAnimation(TranslateTransform.YProperty, null);
+
+        Settings.BeginAnimation(OpacityProperty, null);
+        Lift(Settings).BeginAnimation(TranslateTransform.YProperty, null);
+
+        RestoreToast.BeginAnimation(OpacityProperty, null);
+        Lift(RestoreToast).BeginAnimation(TranslateTransform.YProperty, null);
+    }
 
     // ---- settings --------------------------------------------------------------------
 

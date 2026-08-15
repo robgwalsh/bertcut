@@ -14,6 +14,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The UI harness hosts this window offscreen and drives it through the same dispatch
+         point the keyboard does. Seeing the internals is what lets it assert against the
+         real named elements instead of a parallel set of accessors. -->
+    <InternalsVisibleTo Include="BertCut.Harness" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Ship the FFmpeg build beside the executable. One copy serves both the in-process
          decoder (the shared libraries) and export (ffmpeg.exe), which is what keeps the
          preview and the exported file agreeing at the codec level. Installed by

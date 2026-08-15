@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using BertCut.Core.Media;
+using BertCut.Core.Session;
 
 namespace BertCut.Media;
 
@@ -30,8 +31,7 @@ public sealed class FilmstripCache(FfmpegRuntime runtime)
     /// <summary>Thumbnail width in pixels; height follows the source aspect.</summary>
     public const int ThumbnailWidth = 160;
 
-    private static string Root => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BertCut", "cache");
+    private static string Root => AppPaths.Cache;
 
     public static string DirectoryFor(string contentKey) => Path.Combine(Root, contentKey);
 

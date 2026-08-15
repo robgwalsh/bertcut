@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+
+    <!-- UseWPF infers WinExe, which detaches the process from the console its output is
+         being read from. This harness exists to be read, so keep it a console app. -->
+    <DisableWinExeOutputInference>true</DisableWinExeOutputInference>
+
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>BertCut.Harness</AssemblyName>
+    <RootNamespace>BertCut.Harness</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- A WPF project's implicit usings are the desktop set, which leaves System.IO out.
+         Everything here writes captures and scripts to disk. -->
+    <Using Include="System.IO" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\BertCut.App\BertCut.App.csproj" />
+  </ItemGroup>
+
+</Project>

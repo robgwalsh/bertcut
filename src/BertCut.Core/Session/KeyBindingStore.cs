@@ -45,9 +45,7 @@ internal sealed partial class ControlsJsonContext : JsonSerializerContext;
 /// </remarks>
 public static class KeyBindingStore
 {
-    public static string FilePath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "BertCut", "controls.json");
+    public static string FilePath => AppPaths.Controls;
 
     /// <summary>Loads the saved bindings, or the defaults when there are none.</summary>
     public static KeyBindings Load()

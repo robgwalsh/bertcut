@@ -69,8 +69,7 @@ internal sealed partial class SessionJsonContext : JsonSerializerContext;
 /// </remarks>
 public static class SessionStore
 {
-    private static string Root => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BertCut", "sessions");
+    private static string Root => AppPaths.Sessions;
 
     public static string PathFor(string sessionKey) =>
         Path.Combine(Root, sessionKey, "project.json");
