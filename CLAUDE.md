@@ -41,6 +41,40 @@ Three things are worth knowing before touching any of it:
 directory, keyed by content key exactly as the filmstrip is. It feeds both the waveform lane
 and the coarse correlation pass.
 
+## The timeline strip
+
+Three lanes, and which one a press lands in decides what it means. `TimelineControl` owns
+that decision because it is a question about pixels; `EditorViewModel` owns what happens next
+because the answer is an edit.
+
+- **The ruler** (the top 16px) and **the waveform lane** are the only things that move the
+  playhead. They are also where a press lets go of a selection.
+- **The track** selects a base segment and nothing else — clicking a clip does not seek, so
+  picking one up never costs you your place. Dragging one past the middle of its neighbour
+  reorders the running order; that waits for the pointer to travel `DragThreshold`, so
+  selecting a segment survives a shaky hand. With a single segment there is nothing to
+  reorder and the drag simply ends.
+- **The green band** along the bottom of the track is an overlay clip: body moves it, either
+  end trims it. The band takes the press before the segment under it.
+
+One lane for time, one for clips, and no exceptions in either direction — a track that seeked
+when it happened to have nothing to select would be a rule you could only learn by tripping
+over it.
+
+Two things are only right because they were got wrong first:
+
+- **The hit test decides which clip, not the frame.** Ranges are half-open, so the last pixel
+  column of a clip belongs to a frame the clip does not contain — and that column is exactly
+  where its out-point is grabbed. The control passes the index it hit.
+- **The selected item wins a shared boundary column.** Two clips that touch both answer to a
+  press on the seam. Without this, the front of a clip could never be trimmed once something
+  abutted it.
+
+Selections are indices, and `OnDocumentChanged` drops them on every edit — an index means
+nothing against a document that has been renumbered. The two drags are the exception: they
+keep their own index in step with what they are rewriting, which is also why they are the
+only callers allowed to survive a change.
+
 ## Never launch the GUI
 
 `dotnet run --project src\BertCut.App` — and `BertCut.App.exe` — put a real window on the
@@ -90,14 +124,28 @@ sample-angles <path> [sec]  one clip holding the same event twice: an angle, the
 open|import|append <path>
 key <gesture>               through the live key map:  key I  ·  key Ctrl+Z  ·  key >
 intent <EditorIntent>       straight to the window's dispatch point
+select-overlay <frame>      press and release on that overlay's band in the strip
+drag-overlay <from> <to>    press on the band at <from> and drag until the grabbed point is
+                            over <to>, in steps, as a mouse would
+trim-overlay start|end <to> drag that end of the *selected* clip to <to>, which trims it
+select-segment <frame>      click the base track there, which picks that segment out
+drag-segment <from> <to>    drag that segment along the track, reordering as it goes
+scrub <frame>               click the ruler above the track — seeks, and deselects
 goto <frame> | play | stop | tick [n] | sleep <ms> | reset | close | settle [ms]
 shot <name> [element]       PNG of the window, or of any x:Name'd element
 dump-preview <name>.png     the composited video frame alone, no interface
 state                       one JSON line: playhead, duration, marks, mode, crops, overlays,
-                            overlaySourceStart, muted, status
+                            segments, selectedSegment, overlaySourceStart, selectedOverlay,
+                            overlayStart, overlayEnd, muted, status
 assert-status <substring> | assert-timecode <text> | assert-frame <n>
 assert-frame-between <a> <b> | assert-visible <Name> | assert-hidden <Name>
-assert-overlay-source-start <a> [b]   where the overlay under the playhead reads from
+assert-overlay-source-start <a> [b]   where the overlay in question reads from
+assert-overlay-start <a> [b] | assert-overlay-end <a> [b]
+                                      what it covers on the timeline. "The overlay in
+                                      question" is the selected one, else the one under the
+                                      playhead — a trim moves a clip out from under it.
+assert-overlay-selected [index] | assert-no-overlay-selected | assert-overlays <n>
+assert-segment-selected [index] | assert-no-segment-selected | assert-segments <n>
 assert-muted | assert-unmuted
 assert-has-media | assert-no-media | assert-unlocked <path>   (exclusive open, so it
                                                                really tests the handle)
@@ -107,6 +155,13 @@ Options: `--out <dir>`, `--state-dir <dir>`, `--keep-state`, `--timeout <sec>`,
 `--busy-timeout <ms>`, `--keep-going`, `--audio`, `--verbose`.
 
 ### Rules
+
+**The mouse is not synthesised.** No cursor is over an offscreen window and the only real one
+belongs to the user, so `select-overlay` and `drag-overlay` drive `TimelineControl`'s own
+`PointerDown`/`PointerMove`/`PointerUp` — the three methods its mouse handlers call — at points
+the control works out from a frame number. Everything above the OS input layer is therefore
+under test: the hit test, the grab offset, the pixel-to-frame arithmetic. Keep new pointer
+gestures in that shape rather than in the event handlers, or they become undrivable.
 
 **Prefer the cheapest tier.** Anything about *video* pixels — where a crop landed, which frame
 shows after a ripple delete, whether an overlay is in the right place — belongs in

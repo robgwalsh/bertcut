@@ -1,0 +1,132 @@
+# Picking an overlay off the strip: selecting it, moving it, trimming its ends, deleting it.
+#
+# Everything below goes through TimelineControl's own press-move-release, at points the
+# control works out from frame numbers — so the hit test, the grab offset and the
+# pixel-to-frame arithmetic are all under test rather than stepped around. Which of the three
+# gestures happens is never stated: it follows from where the press lands, exactly as it does
+# under a mouse.
+
+sample clip.mp4 6
+open clip.mp4
+
+# An overlay over frames 30 to 90, of the video on itself.
+goto 30
+key I
+goto 90
+key O
+key P
+key Enter
+
+# The playhead is on the out point, which is one past the end of a half-open range — so park
+# it inside the clip before asking about "the overlay under the playhead".
+goto 60
+assert-overlay-start 30
+shot 01-placed
+
+# Nothing is selected until something is clicked.
+assert-no-overlay-selected
+
+# Click the band in the middle of the clip.
+select-overlay 60
+assert-overlay-selected 0
+assert-overlay-start 30
+shot 02-selected
+
+# Drag that same grabbed point 60 frames later. The clip follows the point rather than
+# snapping its start under it, so it lands at 90 and keeps its 60-frame length.
+drag-overlay 60 120
+assert-overlay-start 88 92
+state
+shot 03-dragged
+
+# A whole drag is one undo step, however many mouse-moves it took.
+key Ctrl+Z
+assert-overlay-start 30
+
+# It cannot be pushed off the end of the timeline: 180 frames long, 60 frames of clip.
+select-overlay 60
+drag-overlay 60 500
+assert-overlay-start 120
+shot 04-clamped
+
+# Escape lets go of it.
+key Escape
+assert-no-overlay-selected
+shot 05-deselected
+
+# Two clips, and the one being dragged stops against the other rather than eating it. A
+# drag is an edit per mouse-move, so a clip that could push through its neighbour would
+# consume it on the way past with nothing left to undo back to.
+key Ctrl+Z
+goto 120
+key I
+goto 170
+key O
+key P
+key Enter
+
+select-overlay 145
+assert-overlay-selected 1
+
+# Grabbed 25 frames in and dragged to frame 40, so it is asking to start at 15 — and lands
+# flush against the first clip's end at 90 instead.
+drag-overlay 145 40
+assert-overlay-selected 1
+assert-overlay-start 90
+shot 06-stopped-against-neighbour
+
+# Trimming. The clip runs 90 to 140; pull its back edge in to 120. Only the out-point moves —
+# if the press had grabbed the body instead, the start would have moved with it.
+trim-overlay end 120
+assert-overlay-start 90
+assert-overlay-end 118 122
+shot 07-trimmed-back
+
+# Now the front edge, pulled in to 110. The in-point moves and the content goes with it:
+# this clip reads from source frame 120, and dropping 20 frames off its front reads 20
+# further in. Anything less and the frames it still covers would show something new.
+assert-overlay-source-start 120
+trim-overlay start 110
+assert-overlay-start 108 112
+assert-overlay-end 118 122
+assert-overlay-source-start 138 142
+shot 08-trimmed-front
+
+# And back out again, which is the same edge going the other way. It has room: its neighbour
+# ends at 90, and there are 140 frames of source in front of its in-point.
+trim-overlay start 100
+assert-overlay-start 98 102
+assert-overlay-source-start 128 132
+
+# Each trim is its own undo step, because letting go of the mouse ends the gesture.
+key Ctrl+Z
+goto 115
+assert-overlay-start 108 112
+assert-overlay-end 118 122
+assert-overlay-source-start 138 142
+
+# Delete takes the selected clip, wherever the playhead happens to be.
+goto 0
+select-overlay 115
+assert-overlay-selected 1
+key Delete
+assert-overlays 1
+assert-status Removed
+assert-no-overlay-selected
+shot 09-deleted
+
+key Ctrl+Z
+assert-overlays 2
+
+# With nothing selected it falls back to the clip under the playhead, as it always did.
+key Escape
+goto 60
+key Shift+P
+assert-overlays 1
+assert-status Removed
+
+# And with neither, it says so rather than quietly doing nothing.
+goto 0
+key Delete
+assert-status No overlay selected
+state

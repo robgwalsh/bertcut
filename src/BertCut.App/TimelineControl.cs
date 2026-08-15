@@ -7,6 +7,24 @@ using BertCut.Core.Timeline;
 
 namespace BertCut.App;
 
+/// <summary>Which part of an overlay's band a pointer has hold of.</summary>
+/// <remarks>
+/// The whole vocabulary of dragging a clip: pull it in the middle and it moves, pull an end
+/// and that end moves. Decided by <see cref="TimelineControl"/>, because it is a question
+/// about pixels, and acted on by <see cref="EditorViewModel"/>, because the answer is an edit.
+/// </remarks>
+public enum OverlayGrip
+{
+    /// <summary>The body of the clip: dragging moves the whole thing.</summary>
+    Body,
+
+    /// <summary>Its leading edge: dragging trims the in-point.</summary>
+    Start,
+
+    /// <summary>Its trailing edge: dragging trims the out-point.</summary>
+    End,
+}
+
 /// <summary>
 /// The timeline strip: segments, crop and overlay spans, the marked range, and the playhead.
 /// </summary>
@@ -39,9 +57,15 @@ public sealed class TimelineControl : FrameworkElement
 {
     private static readonly Brush SegmentBrush = Frozen(Color.FromRgb(0x33, 0x3B, 0x47));
     private static readonly Brush SegmentAlternate = Frozen(Color.FromRgb(0x3C, 0x45, 0x52));
+    private static readonly Brush SegmentSelected = Frozen(Color.FromRgb(0x50, 0x5E, 0x70));
+    private static readonly Pen SegmentSelectedPen = FrozenPen(Color.FromRgb(0xD6, 0xE1, 0xEF), 1);
+    private static readonly Brush RulerBrush = Frozen(Color.FromRgb(0x26, 0x2B, 0x33));
     private static readonly Brush SelectionBrush = Frozen(Color.FromArgb(0x55, 0x4F, 0x9C, 0xF5));
     private static readonly Brush CropBrush = Frozen(Color.FromArgb(0xAA, 0xF2, 0xA1, 0x4C));
     private static readonly Brush OverlayBrush = Frozen(Color.FromArgb(0xAA, 0x6D, 0xD4, 0x8B));
+    private static readonly Brush OverlaySelectedBrush = Frozen(Color.FromRgb(0x9A, 0xEB, 0xB2));
+    private static readonly Pen OverlaySelectedPen = FrozenPen(Color.FromRgb(0xF2, 0xFF, 0xF6), 1);
+    private static readonly Brush GripBrush = Frozen(Color.FromRgb(0x22, 0x5F, 0x3B));
     private static readonly Brush BackgroundBrush = Frozen(Color.FromRgb(0x1E, 0x22, 0x28));
     private static readonly Pen BoundaryPen = FrozenPen(Color.FromRgb(0x11, 0x14, 0x18), 1);
     private static readonly Pen PlayheadPen = FrozenPen(Color.FromRgb(0xFF, 0x5C, 0x5C), 2);
@@ -53,8 +77,73 @@ public sealed class TimelineControl : FrameworkElement
     private const double WaveHeight = 30;
     private const double WaveGap = 4;
 
+    /// <summary>
+    /// Where the segment track starts, leaving a lane above it for the playhead's head.
+    /// </summary>
+    /// <remarks>
+    /// That lane is the ruler, and since the track itself started answering to clicks it is
+    /// also the place a drag always scrubs. Tinted rather than left as background for exactly
+    /// that reason: a strip you can drag along has to look like one.
+    /// </remarks>
+    private const double TrackTop = 16;
+
+    /// <summary>The crop band along the top of the track.</summary>
+    private const double CropBandHeight = 5;
+
+    /// <summary>
+    /// The overlay band along the bottom of it, twice as tall as the crop's.
+    /// </summary>
+    /// <remarks>
+    /// A crop is a thing to look at; an overlay is a thing to grab. Five pixels reads as a
+    /// marking, which is all the crop is, but it is not a target anyone can hit reliably with
+    /// a pointer — and a band you can drag has to look like one.
+    /// </remarks>
+    private const double OverlayBandHeight = 10;
+
+    /// <summary>How far outside the band a press still counts as landing on it.</summary>
+    private const double GrabTolerance = 3;
+
+    /// <summary>
+    /// How much of each end of a band trims rather than moves.
+    /// </summary>
+    /// <remarks>
+    /// Capped at a third of the band in <see cref="OverlayAt"/>, so a short clip always keeps
+    /// a middle to take hold of. A clip you can only trim and never move would be the worst
+    /// of the two.
+    /// </remarks>
+    private const double EdgeGrab = 5;
+
+    /// <summary>So a very short overlay is still visible, and still catchable.</summary>
+    private const double MinBandWidth = 3;
+
+    /// <summary>What the pointer is doing between press and release.</summary>
+    private enum DragKind
+    {
+        None,
+
+        /// <summary>Scrubbing the playhead.</summary>
+        Scrub,
+
+        /// <summary>Moving or trimming the selected overlay.</summary>
+        Overlay,
+
+        /// <summary>Holding a base segment, which becomes a reorder once the pointer travels.</summary>
+        Segment,
+    }
+
+    /// <summary>
+    /// How far the pointer must travel before holding a segment starts rearranging the track.
+    /// </summary>
+    /// <remarks>
+    /// Without it every click on the base track would be a potential reorder, and picking a
+    /// segment out to look at it could not survive a hand that moves a pixel while pressing.
+    /// </remarks>
+    private const double DragThreshold = 4;
+
     private EditorViewModel? _model;
-    private bool _dragging;
+    private DragKind _drag;
+    private double _pressX;
+    private bool _reordering;
 
     private Geometry? _waveform;
     private double _waveformWidth = -1;
@@ -105,24 +194,25 @@ public sealed class TimelineControl : FrameworkElement
 
         if (_model is null || !_model.HasMedia || _model.DurationFrames <= 0) return;
 
-        var duration = _model.DurationFrames;
-        double X(long frame) => frame / (double)duration * width;
+        double X(long frame) => XOf(frame, width);
 
         // Alternating segment fills make each ripple delete visible as a seam, which is
         // the fastest way to confirm a cut landed where it was meant to.
-        var trackTop = 14.0;
+        var (trackTop, trackHeight) = Track();
         var waveTop = height - 12 - WaveHeight;
-        var trackHeight = Math.Max(12, waveTop - WaveGap - trackTop);
 
-        var i = 0;
-        foreach (var segment in _model.Project.Base)
+        dc.DrawRectangle(RulerBrush, null, new Rect(0, 0, width, TrackTop));
+
+        var selectedSegment = _model.SelectedSegment;
+
+        for (var i = 0; i < _model.Project.Base.Length; i++)
         {
-            var x0 = X(segment.TimelineStart);
-            var x1 = X(segment.TimelineStart + segment.LengthFrames);
+            var band = SegmentRect(_model.Project.Base[i], width);
 
             dc.DrawRectangle(
-                i++ % 2 == 0 ? SegmentBrush : SegmentAlternate, null,
-                new Rect(x0, trackTop, Math.Max(1, x1 - x0), trackHeight));
+                i == selectedSegment ? SegmentSelected : i % 2 == 0 ? SegmentBrush : SegmentAlternate,
+                i == selectedSegment ? SegmentSelectedPen : null,
+                band);
         }
 
         // A hard seam on top of the fills, so a cut reads even where two adjacent segments
@@ -138,12 +228,33 @@ public sealed class TimelineControl : FrameworkElement
         // track rather than as separate clips.
         foreach (var crop in _model.Project.Crops)
             dc.DrawRectangle(CropBrush, null,
-                new Rect(X(crop.Range.Start), trackTop, Math.Max(1, X(crop.Range.End) - X(crop.Range.Start)), 5));
+                new Rect(X(crop.Range.Start), trackTop,
+                    Math.Max(1, X(crop.Range.End) - X(crop.Range.Start)), CropBandHeight));
 
-        foreach (var overlay in _model.Project.Overlays)
-            dc.DrawRectangle(OverlayBrush, null,
-                new Rect(X(overlay.Range.Start), trackTop + trackHeight - 5,
-                    Math.Max(1, X(overlay.Range.End) - X(overlay.Range.Start)), 5));
+        // The selected one is filled brighter and outlined, so which clip a drag is about to
+        // move is unambiguous even where two of them sit end to end.
+        var selected = _model.SelectedOverlay;
+
+        for (var o = 0; o < _model.Project.Overlays.Length; o++)
+        {
+            var band = OverlayBandRect(_model.Project.Overlays[o].Range, width);
+
+            if (o != selected)
+            {
+                dc.DrawRectangle(OverlayBrush, null, band);
+                continue;
+            }
+
+            dc.DrawRectangle(OverlaySelectedBrush, OverlaySelectedPen, band);
+
+            // Darker ends, where pulling trims instead of moving. A clip too narrow to show
+            // them is also too narrow to trim by hand, and the drawing says so.
+            var grip = EdgeWidth(band);
+            if (grip < EdgeGrab) continue;
+
+            dc.DrawRectangle(GripBrush, null, new Rect(band.X, band.Y, grip, band.Height));
+            dc.DrawRectangle(GripBrush, null, new Rect(band.Right - grip, band.Y, grip, band.Height));
+        }
 
         DrawWaveform(dc, width, waveTop);
 
@@ -249,38 +360,283 @@ public sealed class TimelineControl : FrameworkElement
         return geometry;
     }
 
-    // Dragging the timeline scrubs. Capture so a drag that leaves the control keeps
-    // working, which is what makes fast back-and-forth scrubbing feel solid.
+    // ---- geometry ------------------------------------------------------------------
+    //
+    // Shared by the render pass and the hit test, so what the user aims at is by
+    // construction what was painted. Two copies of this arithmetic would be one band drawn
+    // and a different one grabbed, and the drift would only show at some window widths.
+
+    /// <summary>Top and height of the segment track.</summary>
+    private (double Top, double Height) Track()
+    {
+        var waveTop = ActualHeight - 12 - WaveHeight;
+        return (TrackTop, Math.Max(12, waveTop - WaveGap - TrackTop));
+    }
+
+    private double XOf(long frame, double width) =>
+        _model is null || _model.DurationFrames <= 0 ? 0 : frame / (double)_model.DurationFrames * width;
+
+    /// <summary>Where a base segment is painted, in this element's coordinates.</summary>
+    private Rect SegmentRect(BaseSegment segment, double width)
+    {
+        var (top, height) = Track();
+        var x0 = XOf(segment.TimelineStart, width);
+        var x1 = XOf(segment.TimelineStart + segment.LengthFrames, width);
+
+        return new Rect(x0, top, Math.Max(1, x1 - x0), height);
+    }
+
+    /// <summary>Where an overlay's band is painted, in this element's coordinates.</summary>
+    private Rect OverlayBandRect(FrameRange range, double width)
+    {
+        var (top, height) = Track();
+        var x0 = XOf(range.Start, width);
+        var x1 = XOf(range.End, width);
+
+        return new Rect(
+            x0, top + height - OverlayBandHeight, Math.Max(MinBandWidth, x1 - x0), OverlayBandHeight);
+    }
+
+    /// <summary>How much of each end of a band trims rather than moves.</summary>
+    private static double EdgeWidth(Rect band) => Math.Min(EdgeGrab, band.Width / 3);
+
+    /// <summary>
+    /// Which overlay's band is under a point, and what part of it.
+    /// </summary>
+    /// <remarks>
+    /// Two clips that touch share a pixel column, and both of them answer to a press on it.
+    /// The selected one wins that tie: the user has already pointed at it, and the
+    /// alternative is that the front of a clip can never be trimmed once something abuts it —
+    /// the neighbour's out-point would take every press on the seam. Otherwise the first
+    /// band along wins, which is only reached when nothing is selected.
+    /// </remarks>
+    private (int Index, OverlayGrip Grip)? OverlayAt(Point point)
+    {
+        if (_model is null || !_model.HasMedia || _model.DurationFrames <= 0) return null;
+
+        var width = ActualWidth;
+        (int Index, OverlayGrip Grip)? first = null;
+
+        for (var i = 0; i < _model.Project.Overlays.Length; i++)
+        {
+            if (GripAt(_model.Project.Overlays[i].Range, point, width) is not { } grip) continue;
+            if (i == _model.SelectedOverlay) return (i, grip);
+
+            first ??= (i, grip);
+        }
+
+        return first;
+    }
+
+    /// <summary>Which base segment is under a point, or null when it is off the track.</summary>
+    /// <remarks>
+    /// The selected one wins a shared boundary column, on the same reasoning as the overlay
+    /// bands: a drag that starts on a seam should go on being about the clip already in hand.
+    /// </remarks>
+    private int? SegmentAt(Point point)
+    {
+        if (_model is null || !_model.HasMedia || _model.DurationFrames <= 0) return null;
+
+        var width = ActualWidth;
+        int? first = null;
+
+        for (var i = 0; i < _model.Project.Base.Length; i++)
+        {
+            if (!SegmentRect(_model.Project.Base[i], width).Contains(point)) continue;
+            if (i == _model.SelectedSegment) return i;
+
+            first ??= i;
+        }
+
+        return first;
+    }
+
+    /// <summary>Where on one band a point falls, or null when it is not on it at all.</summary>
+    private OverlayGrip? GripAt(FrameRange range, Point point, double width)
+    {
+        var band = OverlayBandRect(range, width);
+
+        var reach = band;
+        reach.Inflate(GrabTolerance, GrabTolerance);
+        if (!reach.Contains(point)) return null;
+
+        var edge = EdgeWidth(band);
+
+        if (point.X <= band.X + edge) return OverlayGrip.Start;
+        if (point.X >= band.Right - edge) return OverlayGrip.End;
+
+        return OverlayGrip.Body;
+    }
+
+    /// <summary>The timeline frame at a horizontal position.</summary>
+    private long FrameAt(double x)
+    {
+        if (_model is null || _model.DurationFrames <= 0) return 0;
+
+        var fraction = Math.Clamp(x / Math.Max(1, ActualWidth), 0, 1);
+        return (long)(fraction * _model.DurationFrames);
+    }
+
+    // ---- the pointer ---------------------------------------------------------------
+    //
+    // The gesture proper lives in the three methods below rather than in the event
+    // handlers, because the harness cannot synthesise a pointer: there is no cursor over an
+    // offscreen window, and moving the real one would move the user's. Driving these instead
+    // leaves the hit test, the grab offset and the pixel-to-frame arithmetic under test
+    // rather than stepped around.
+
+    /// <summary>Begins whatever gesture a press at this point means.</summary>
+    internal void PointerDown(Point point)
+    {
+        if (_model is null || !_model.HasMedia) return;
+
+        _pressX = point.X;
+        _reordering = false;
+
+        // An overlay band takes the press first: it is the smaller and more deliberate
+        // target, and it sits inside the track rather than beside it.
+        if (OverlayAt(point) is { } hit && _model.BeginOverlayDrag(hit.Index, FrameAt(point.X), hit.Grip))
+        {
+            _drag = DragKind.Overlay;
+            return;
+        }
+
+        // On the track: pick out the segment, and leave the playhead alone. Rearranging the
+        // running order waits for the pointer to travel — see PointerMove.
+        if (SegmentAt(point) is { } segment)
+        {
+            _drag = DragKind.Segment;
+            _model.SelectSegment(segment);
+            return;
+        }
+
+        // Off the track — the ruler, the waveform, the margins. Scrubs, and lets go of
+        // whatever was selected: clicking off a thing is how a selection is dropped.
+        _model.ClearOverlaySelection();
+        _model.ClearSegmentSelection();
+        _drag = DragKind.Scrub;
+        ScrubToMouse(point.X);
+    }
+
+    internal void PointerMove(Point point)
+    {
+        switch (_drag)
+        {
+            case DragKind.Scrub:
+                ScrubToMouse(point.X);
+                break;
+
+            case DragKind.Overlay:
+                _model?.DragOverlayTo(FrameAt(point.X));
+                break;
+
+            case DragKind.Segment:
+                if (!_reordering)
+                {
+                    if (Math.Abs(point.X - _pressX) < DragThreshold) return;
+
+                    // Nothing to reorder — one segment, or a placement in progress. The drag
+                    // ends there rather than falling back to scrubbing: the track does not
+                    // move the playhead, and a lane that made an exception when it happened
+                    // to have nothing to rearrange would be worse than one that never does.
+                    if (_model?.BeginSegmentReorder() != true)
+                    {
+                        _drag = DragKind.None;
+                        return;
+                    }
+
+                    _reordering = true;
+                }
+
+                _model?.DragSegmentTo(FrameAt(point.X));
+                break;
+        }
+    }
+
+    internal void PointerUp()
+    {
+        if (_drag == DragKind.Overlay) _model?.EndOverlayDrag();
+        if (_drag == DragKind.Segment) _model?.EndSegmentDrag();
+
+        _drag = DragKind.None;
+        _reordering = false;
+    }
+
+    /// <summary>The middle of a frame's overlay band, for a harness driving a drag.</summary>
+    internal Point OverlayBandPoint(long frame)
+    {
+        var (top, height) = Track();
+        return new Point(XOf(frame, ActualWidth), top + height - (OverlayBandHeight / 2));
+    }
+
+    /// <summary>A frame's segment, clear of the overlay band below it — likewise.</summary>
+    internal Point SegmentPoint(long frame)
+    {
+        var (top, height) = Track();
+        return new Point(XOf(frame, ActualWidth), top + ((height - OverlayBandHeight) / 2));
+    }
+
+    /// <summary>The ruler above the track, where a press only ever seeks.</summary>
+    internal Point RulerPoint(long frame) => new(XOf(frame, ActualWidth), TrackTop / 2);
+
+    // Capture so a drag that leaves the control keeps working, which is what makes fast
+    // back-and-forth scrubbing feel solid — and what stops an overlay being dropped
+    // somewhere unintended the moment the pointer strays out of an 86px strip.
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
     {
         if (_model is null || !_model.HasMedia) return;
 
-        _dragging = true;
         CaptureMouse();
-        ScrubToMouse(e.GetPosition(this).X);
+        PointerDown(e.GetPosition(this));
         e.Handled = true;
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
-        if (_dragging) ScrubToMouse(e.GetPosition(this).X);
+        if (_model is null || !_model.HasMedia) return;
+
+        var point = e.GetPosition(this);
+
+        // Idle, the cursor is the only advertisement that these bands can be dragged at all
+        // — and the only thing that says the ends do something different from the middle.
+        if (_drag == DragKind.None)
+        {
+            Cursor = OverlayAt(point)?.Grip switch
+            {
+                OverlayGrip.Body => Cursors.Hand,
+                OverlayGrip.Start or OverlayGrip.End => Cursors.SizeWE,
+                _ => SegmentAt(point) is not null ? Cursors.Hand : Cursors.Arrow,
+            };
+
+            return;
+        }
+
+        PointerMove(point);
     }
 
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
     {
-        if (!_dragging) return;
+        if (_drag == DragKind.None) return;
 
-        _dragging = false;
+        PointerUp();
         ReleaseMouseCapture();
         e.Handled = true;
+    }
+
+    /// <summary>Ends a drag that lost the mouse, e.g. to a window that stole capture.</summary>
+    protected override void OnLostMouseCapture(MouseEventArgs e)
+    {
+        PointerUp();
+        base.OnLostMouseCapture(e);
     }
 
     private void ScrubToMouse(double x)
     {
         if (_model is null || _model.DurationFrames <= 0) return;
 
-        var fraction = Math.Clamp(x / Math.Max(1, ActualWidth), 0, 1);
-        _model.ScrubTo((long)(fraction * (_model.DurationFrames - 1)));
+        // One short of the end, because the playhead sits on a frame where the position a
+        // drag reads is the boundary in front of one.
+        _model.ScrubTo(Math.Min(FrameAt(x), _model.DurationFrames - 1));
     }
 
     /// <summary>

@@ -575,7 +575,51 @@
                                         </StackPanel>
                                         <TextBlock Text="Overlay a clip" Style="{StaticResource CardTitle}" />
                                         <TextBlock Style="{StaticResource CardBody}"
-                                                   Text="Picture-in-picture over the marked range. Ctrl+I imports a webcam take to use; with nothing imported, P puts the video on top of itself as a zoomed inset. A lines the overlay up with the base track by its sound — for the same event filmed twice, that is the whole job." />
+                                                   Text="Picture-in-picture over the marked range. Ctrl+I imports a webcam take to use; with nothing imported, P puts the video on top of itself as a zoomed inset. A lines the overlay up with the base track by its sound — for the same event filmed twice, that is the whole job. Afterwards it is the green band on the timeline — see below for what you can do to it there." />
+                                    </StackPanel>
+                                </Border>
+                            </UniformGrid>
+
+                            <!-- The strip. Worth its own section since the track started
+                                 answering to clicks: which lane you press in decides what
+                                 the press means, and that is not guessable. -->
+                            <TextBlock Text="THE TIMELINE STRIP  ·  WHAT A CLICK DOES WHERE"
+                                       Style="{StaticResource SectionHead}" />
+
+                            <!-- Named so the harness can capture this section on its own:
+                                 it sits below the fold of a sheet that cannot be scrolled
+                                 from a script. -->
+                            <UniformGrid x:Name="StripHelp" Columns="3">
+                                <Border Style="{StaticResource Card}" Padding="18">
+                                    <StackPanel>
+                                        <Border Height="3" Width="36" CornerRadius="2" Background="#8D9BAC"
+                                                HorizontalAlignment="Left" Margin="0,0,0,14" />
+                                        <TextBlock Text="The ruler, and the waveform"
+                                                   Style="{StaticResource CardTitle}" />
+                                        <TextBlock Style="{StaticResource CardBody}"
+                                                   Text="The lane above the track and the sound below it. Press or drag anywhere in either and the playhead follows — these are the only two places that move it. Nothing here selects anything, so this is also how you let go of what is selected." />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource Card}" Padding="18">
+                                    <StackPanel>
+                                        <Border Height="3" Width="36" CornerRadius="2" Background="#505E70"
+                                                HorizontalAlignment="Left" Margin="0,0,0,14" />
+                                        <TextBlock Text="The track — your clips"
+                                                   Style="{StaticResource CardTitle}" />
+                                        <TextBlock Style="{StaticResource CardBody}"
+                                                   Text="Every piece the cuts have left, in alternating shades. Click one to pick it out — the playhead stays where it is, so choosing a clip never costs you your place. Delete ripples it away and closes the gap. Drag it and it changes places with its neighbours: the running order of the film, rearranged by hand." />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource Card}" Padding="18">
+                                    <StackPanel>
+                                        <Border Height="3" Width="36" CornerRadius="2" Background="#6DD48B"
+                                                HorizontalAlignment="Left" Margin="0,0,0,14" />
+                                        <TextBlock Text="The green band — overlays"
+                                                   Style="{StaticResource CardTitle}" />
+                                        <TextBlock Style="{StaticResource CardBody}"
+                                                   Text="Along the bottom of the track, wherever you have placed one. Click to pick it out, drag its middle to move it, drag either end — the darker ones — to trim it. What it shows stays put while you trim, so a synced overlay stays synced. Delete takes it off." />
                                     </StackPanel>
                                 </Border>
                             </UniformGrid>

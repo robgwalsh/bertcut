@@ -57,6 +57,17 @@ public enum EditorIntent
     BeginOverlay, RemoveOverlayAtPlayhead,
 
     /// <summary>
+    /// Remove whatever is picked out on the timeline: a base segment ripples away, an
+    /// overlay comes off the top.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="RemoveOverlayAtPlayhead"/>, which means one specific thing
+    /// and goes on saying it. This one is the delete key: what it removes depends on what is
+    /// selected, which is the only way one key can serve two kinds of clip.
+    /// </remarks>
+    DeleteSelection,
+
+    /// <summary>
     /// No longer bound and no longer acted on: the export mixes the base track's audio and
     /// only that, so muting an overlay never changed anything.
     /// <see cref="ToggleMute"/> took its key and does something a user can hear.
@@ -157,14 +168,19 @@ public static class KeyMap
         // Marking and the three operations
         new(EditorKey.I, EditorModifiers.None, EditorMode.Normal, EditorIntent.MarkIn, "Mark in"),
         new(EditorKey.O, EditorModifiers.None, EditorMode.Normal, EditorIntent.MarkOut, "Mark out"),
-        new(EditorKey.Escape, EditorModifiers.None, EditorMode.Normal, EditorIntent.ClearMarks, "Clear in / out"),
+        new(EditorKey.Escape, EditorModifiers.None, EditorMode.Normal, EditorIntent.ClearMarks, "Clear in / out, deselect"),
         new(EditorKey.X, EditorModifiers.None, EditorMode.Normal, EditorIntent.RippleDelete, "Ripple delete the marked range"),
         new(EditorKey.Delete, EditorModifiers.Shift, EditorMode.Normal, EditorIntent.RippleDelete, "Ripple delete the marked range"),
         new(EditorKey.S, EditorModifiers.None, EditorMode.Normal, EditorIntent.SplitAtPlayhead, "Split at the playhead"),
         new(EditorKey.C, EditorModifiers.None, EditorMode.Normal, EditorIntent.BeginCrop, "Crop the marked range, or the whole video if nothing is marked"),
         new(EditorKey.C, EditorModifiers.Shift, EditorMode.Normal, EditorIntent.ClearCropAtPlayhead, "Clear the crop under the playhead"),
         new(EditorKey.P, EditorModifiers.None, EditorMode.Normal, EditorIntent.BeginOverlay, "Place an overlay over the marked range"),
-        new(EditorKey.P, EditorModifiers.Shift, EditorMode.Normal, EditorIntent.RemoveOverlayAtPlayhead, "Remove the overlay under the playhead"),
+        new(EditorKey.P, EditorModifiers.Shift, EditorMode.Normal, EditorIntent.RemoveOverlayAtPlayhead, "Remove the selected overlay, or the one under the playhead"),
+
+        // The key everyone reaches for once something is picked out on the strip. Bare Delete
+        // was free: ripple delete has always been on Shift+Delete, which is the gesture that
+        // takes a marked range out of the timeline rather than a clip you have pointed at.
+        new(EditorKey.Delete, EditorModifiers.None, EditorMode.Normal, EditorIntent.DeleteSelection, "Remove what is selected on the timeline"),
         new(EditorKey.A, EditorModifiers.None, EditorMode.Normal, EditorIntent.SyncOverlayAudio, "Sync the overlay to the base track by its sound"),
         new(EditorKey.M, EditorModifiers.None, EditorMode.Normal, EditorIntent.ToggleMute, "Mute / unmute the preview"),
 
@@ -252,7 +268,7 @@ public static class KeyMap
                 or EditorIntent.RippleDelete or EditorIntent.SplitAtPlayhead
                 or EditorIntent.BeginCrop or EditorIntent.ClearCropAtPlayhead
                 or EditorIntent.BeginOverlay or EditorIntent.RemoveOverlayAtPlayhead
-                or EditorIntent.SyncOverlayAudio
+                or EditorIntent.DeleteSelection or EditorIntent.SyncOverlayAudio
                 or EditorIntent.ToggleOverlayMute => "Edit",
 
             _ => "File and view",

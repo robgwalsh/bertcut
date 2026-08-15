@@ -2,6 +2,8 @@ using System.Globalization;
 using System.Windows;
 using BertCut.App;
 using BertCut.Core.Input;
+using BertCut.Core.Model;
+using BertCut.Core.Time;
 using BertCut.Media;
 
 namespace BertCut.Harness;
@@ -91,6 +93,13 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
             case "key": Key(rest); break;
             case "intent": Intent(rest); break;
 
+            case "select-overlay": SelectOverlay(rest); break;
+            case "drag-overlay": DragOverlay(rest); break;
+            case "trim-overlay": TrimOverlay(rest); break;
+            case "select-segment": SelectSegment(rest); break;
+            case "drag-segment": DragSegment(rest); break;
+            case "scrub": Scrub(rest); break;
+
             case "goto": Goto(rest); break;
             case "play": session.Dispatch(EditorIntent.PlayPause); break;
             case "stop": session.Dispatch(EditorIntent.Stop); break;
@@ -109,6 +118,14 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
             case "assert-frame": AssertFrame(rest); break;
             case "assert-frame-between": AssertFrameBetween(rest); break;
             case "assert-overlay-source-start": AssertOverlaySourceStart(rest); break;
+            case "assert-overlay-selected": AssertOverlaySelected(rest); break;
+            case "assert-no-overlay-selected": AssertNoOverlaySelected(); break;
+            case "assert-overlay-start": AssertOverlayStart(rest); break;
+            case "assert-overlay-end": AssertOverlayEnd(rest); break;
+            case "assert-overlays": AssertOverlays(rest); break;
+            case "assert-segments": AssertSegments(rest); break;
+            case "assert-segment-selected": AssertSegmentSelected(rest); break;
+            case "assert-no-segment-selected": AssertNoSegmentSelected(); break;
             case "assert-muted": AssertMuted(rest, expected: true); break;
             case "assert-unmuted": AssertMuted(rest, expected: false); break;
             case "assert-visible": AssertVisibility(rest, Visibility.Visible); break;
@@ -208,6 +225,215 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
         session.Settle();
     }
 
+    // ---- the timeline's pointer -------------------------------------------------------
+
+    /// <summary>
+    /// Presses on the overlay band at a frame, as a click on the strip does.
+    /// </summary>
+    /// <remarks>
+    /// Through <see cref="TimelineControl"/>'s own press-move-release methods — the ones its
+    /// mouse handlers call — at a point the control works out for itself. Nothing here
+    /// synthesises operating-system input, for the same reason keys do not: an offscreen
+    /// window has no pointer over it, and the only real one belongs to the user. What this
+    /// does exercise is everything above that line: the hit test, the grab offset, and the
+    /// pixel-to-frame arithmetic that turns a position into an edit.
+    /// </remarks>
+    private void SelectOverlay(string rest)
+    {
+        var frame = Number(rest, "select-overlay");
+
+        session.Dispatcher.Invoke(() =>
+        {
+            var timeline = session.Window.Timeline;
+            timeline.PointerDown(timeline.OverlayBandPoint(frame));
+            timeline.PointerUp();
+        });
+
+        session.Settle();
+        RequireSelection("select-overlay", frame);
+    }
+
+    /// <summary>
+    /// Drags the overlay under one frame until the grabbed point is over another.
+    /// </summary>
+    /// <remarks>
+    /// In steps rather than one jump, because that is what a mouse produces and because the
+    /// undo history is meant to coalesce them into a single step — a drag that moved in one
+    /// call would pass whether it does or not.
+    /// </remarks>
+    private void DragOverlay(string rest)
+    {
+        var (fromText, toText) = Split(rest);
+        DragBand(Number(fromText, "drag-overlay"), Number(toText, "drag-overlay"), "drag-overlay");
+    }
+
+    /// <summary>
+    /// Drags one end of the selected overlay, which trims it rather than moving it.
+    /// </summary>
+    /// <remarks>
+    /// The press lands on the clip's own edge, so which of the three gestures happens is
+    /// still the control's decision from a pixel position — the same call a mouse makes. The
+    /// selection is re-checked afterwards because two clips sitting end to end share an edge,
+    /// and a press on it belongs to whichever band the hit test reaches first.
+    /// </remarks>
+    private void TrimOverlay(string rest)
+    {
+        var (edgeText, toText) = Split(rest);
+
+        var start = edgeText.ToLowerInvariant() switch
+        {
+            "start" => true,
+            "end" => false,
+            _ => throw new FormatException($"trim-overlay needs 'start' or 'end', got '{edgeText}'."),
+        };
+
+        var to = Number(toText, "trim-overlay");
+
+        var (index, clip) = session.Dispatcher.Invoke(() =>
+            (session.Model.SelectedOverlay, session.Model.SelectedOverlayClip));
+
+        if (clip is null) throw new AssertionException("trim-overlay: select an overlay first.");
+
+        DragBand(start ? clip.Value.Range.Start : clip.Value.Range.End, to, "trim-overlay");
+
+        if (session.Dispatcher.Invoke(() => session.Model.SelectedOverlay) != index)
+            throw new AssertionException(
+                $"trim-overlay: the press on that edge landed on overlay " +
+                $"{session.Dispatcher.Invoke(() => session.Model.SelectedOverlay)}, not {index}.");
+    }
+
+    /// <summary>
+    /// Clicks the ruler above the track, which seeks and nothing else.
+    /// </summary>
+    /// <remarks>
+    /// The counterpart to <c>goto</c>, which reaches past the interface: this is the press a
+    /// user makes when they want to move the playhead and not touch anything, and it is the
+    /// only way to assert that clicking off the track lets go of a selection.
+    /// </remarks>
+    private void Scrub(string rest)
+    {
+        var frame = Number(rest, "scrub");
+
+        session.Dispatcher.Invoke(() =>
+        {
+            var timeline = session.Window.Timeline;
+            timeline.PointerDown(timeline.RulerPoint(frame));
+            timeline.PointerUp();
+        });
+
+        session.Settle();
+    }
+
+    /// <summary>Clicks a base segment, on the part of the track clear of any overlay band.</summary>
+    private void SelectSegment(string rest)
+    {
+        var frame = Number(rest, "select-segment");
+
+        session.Dispatcher.Invoke(() =>
+        {
+            var timeline = session.Window.Timeline;
+            timeline.PointerDown(timeline.SegmentPoint(frame));
+            timeline.PointerUp();
+        });
+
+        session.Settle();
+        RequireSegment("select-segment", frame);
+    }
+
+    /// <summary>
+    /// Drags a base segment along the track, which rearranges the running order.
+    /// </summary>
+    /// <remarks>
+    /// The first move is a nudge a few pixels out of the press. A real pointer crosses the
+    /// drag threshold on its way anywhere; a scripted one has to as well, or the press stays
+    /// the click that merely seeks and selects — which is exactly the distinction the
+    /// threshold exists to draw, and therefore the one worth driving through rather than
+    /// around.
+    /// </remarks>
+    private void DragSegment(string rest)
+    {
+        var (fromText, toText) = Split(rest);
+        var from = Number(fromText, "drag-segment");
+        var to = Number(toText, "drag-segment");
+
+        session.Dispatcher.Invoke(() =>
+        {
+            var timeline = session.Window.Timeline;
+            timeline.PointerDown(timeline.SegmentPoint(from));
+        });
+
+        session.Settle();
+        RequireSegment("drag-segment", from);
+
+        session.Dispatcher.Invoke(() =>
+        {
+            var timeline = session.Window.Timeline;
+            var press = timeline.SegmentPoint(from);
+
+            timeline.PointerMove(new Point(press.X + (to >= from ? Nudge : -Nudge), press.Y));
+
+            for (var step = 1; step <= DragSteps; step++)
+            {
+                var frame = from + ((to - from) * step / DragSteps);
+                timeline.PointerMove(timeline.SegmentPoint(frame));
+            }
+
+            timeline.PointerUp();
+        });
+
+        session.Settle();
+    }
+
+    /// <summary>Enough to clear the drag threshold, in the direction of travel.</summary>
+    private const double Nudge = 6;
+
+    private void RequireSegment(string verb, long frame)
+    {
+        if (session.Dispatcher.Invoke(() => session.Model.SelectedSegment) is null)
+            throw new AssertionException($"{verb}: there is no base segment at frame {frame} to take hold of.");
+    }
+
+    /// <summary>Presses on the band at one frame, drags to another, and releases.</summary>
+    private void DragBand(long from, long to, string verb)
+    {
+        session.Dispatcher.Invoke(() =>
+        {
+            var timeline = session.Window.Timeline;
+            timeline.PointerDown(timeline.OverlayBandPoint(from));
+        });
+
+        session.Settle();
+
+        // Before moving anything: a press that missed every band scrubbed instead, and the
+        // drag that followed would silently be about nothing.
+        RequireSelection(verb, from);
+
+        session.Dispatcher.Invoke(() =>
+        {
+            var timeline = session.Window.Timeline;
+
+            for (var step = 1; step <= DragSteps; step++)
+            {
+                var frame = from + ((to - from) * step / DragSteps);
+                timeline.PointerMove(timeline.OverlayBandPoint(frame));
+            }
+
+            timeline.PointerUp();
+        });
+
+        session.Settle();
+    }
+
+    /// <summary>Pointer moves a drag is broken into.</summary>
+    private const int DragSteps = 8;
+
+    private void RequireSelection(string verb, long frame)
+    {
+        if (session.Dispatcher.Invoke(() => session.Model.SelectedOverlay) is null)
+            throw new AssertionException(
+                $"{verb}: there is no overlay band at frame {frame} to grab.");
+    }
+
     private void Tick(string rest)
     {
         var times = rest.Length == 0 ? 1 : Number(rest, "tick");
@@ -286,10 +512,18 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
             ("hasMedia", model.HasMedia ? "true" : "false"),
             ("crops", Text(model.Project.Crops.Length)),
             ("overlays", Text(model.Project.Overlays.Length)),
+            ("segments", Text(model.Project.Base.Length)),
+            ("selectedSegment", model.SelectedSegment is { } segment ? Text(segment) : "null"),
 
             // Where the overlay under the playhead reads from in its own source — the number
             // the audio sync moves, and the only way to assert that it landed.
             ("overlaySourceStart", OverlaySourceStart(model) is { } start ? Text(start) : "null"),
+
+            // Which overlay is picked out on the strip, and where on the timeline the one in
+            // question begins and ends — the numbers a drag moves and a trim pulls.
+            ("selectedOverlay", model.SelectedOverlay is { } selected ? Text(selected) : "null"),
+            ("overlayStart", OverlayRange(model) is { } from ? Text(from.Start) : "null"),
+            ("overlayEnd", OverlayRange(model) is { } to ? Text(to.End) : "null"),
 
             ("muted", model.IsMuted ? "true" : "false"),
             ("canUndo", model.CanUndo ? "true" : "false"),
@@ -311,9 +545,29 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
     {
         if (model.Mode == EditorMode.Overlay) return model.PendingOverlaySourceStart;
 
+        // Selection first, on the same reasoning as OverlayRange below: a clip that has been
+        // pointed at is the one being asked about, and trimming its front takes it out from
+        // under the playhead.
+        return (model.SelectedOverlayClip ?? OverlayAtPlayhead(model))?.SourceStartFrame;
+    }
+
+    /// <summary>
+    /// What the overlay in question covers on the timeline.
+    /// </summary>
+    /// <remarks>
+    /// The selected clip first, because a drag is asked about by selecting it and the playhead
+    /// does not follow it along the strip — a trim of the front end moves it out from under
+    /// the playhead as often as not. Otherwise the one under the playhead, which is what every
+    /// other overlay command in this harness means by "the overlay".
+    /// </remarks>
+    private static FrameRange? OverlayRange(EditorViewModel model) =>
+        (model.SelectedOverlayClip ?? OverlayAtPlayhead(model))?.Range;
+
+    private static OverlayClip? OverlayAtPlayhead(EditorViewModel model)
+    {
         foreach (var overlay in model.Project.Overlays)
             if (overlay.Range.Contains(model.Playhead))
-                return overlay.SourceStartFrame;
+                return overlay;
 
         return null;
     }
@@ -370,6 +624,94 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
         if (actual < low || actual > high)
             throw new AssertionException(
                 $"expected the overlay to start in source frames [{low}, {high}], got {actual}.");
+    }
+
+    private void AssertOverlaySelected(string rest)
+    {
+        var actual = session.Dispatcher.Invoke(() => session.Model.SelectedOverlay)
+            ?? throw new AssertionException("no overlay is selected.");
+
+        if (rest.Length == 0) return;
+
+        var expected = Number(rest, "assert-overlay-selected");
+
+        if (actual != expected)
+            throw new AssertionException($"expected overlay {expected} to be selected, got {actual}.");
+    }
+
+    private void AssertNoOverlaySelected()
+    {
+        var actual = session.Dispatcher.Invoke(() => session.Model.SelectedOverlay);
+
+        if (actual is not null)
+            throw new AssertionException($"expected no selection, overlay {actual} is selected.");
+    }
+
+    /// <summary>Asserts where the selected overlay — or the one under the playhead — begins.</summary>
+    /// <remarks>
+    /// Takes a range like the source-start assertion, because a drag is expressed in pixels
+    /// and lands on whichever frame that column covers. A drag asserted to a single frame
+    /// would be an assertion about the width of the window.
+    /// </remarks>
+    private void AssertOverlayStart(string rest) =>
+        AssertOverlayEdge(rest, "assert-overlay-start", start: true);
+
+    private void AssertOverlayEnd(string rest) =>
+        AssertOverlayEdge(rest, "assert-overlay-end", start: false);
+
+    private void AssertOverlayEdge(string rest, string verb, bool start)
+    {
+        var (lowText, highText) = Split(rest);
+        var low = Number(lowText, verb);
+        var high = highText.Length == 0 ? low : Number(highText, verb);
+
+        var range = session.Dispatcher.Invoke(() => OverlayRange(session.Model))
+            ?? throw new AssertionException("there is no overlay selected or under the playhead.");
+
+        var actual = start ? range.Start : range.End;
+
+        if (actual < low || actual > high)
+            throw new AssertionException(
+                $"expected the overlay to {(start ? "start" : "end")} in [{low}, {high}], got {actual}.");
+    }
+
+    private void AssertOverlays(string rest)
+    {
+        var expected = Number(rest, "assert-overlays");
+        var actual = session.Dispatcher.Invoke(() => session.Model.Project.Overlays.Length);
+
+        if (actual != expected)
+            throw new AssertionException($"expected {expected} overlays, got {actual}.");
+    }
+
+    private void AssertSegments(string rest)
+    {
+        var expected = Number(rest, "assert-segments");
+        var actual = session.Dispatcher.Invoke(() => session.Model.Project.Base.Length);
+
+        if (actual != expected)
+            throw new AssertionException($"expected {expected} base segments, got {actual}.");
+    }
+
+    private void AssertSegmentSelected(string rest)
+    {
+        var actual = session.Dispatcher.Invoke(() => session.Model.SelectedSegment)
+            ?? throw new AssertionException("no segment is selected.");
+
+        if (rest.Length == 0) return;
+
+        var expected = Number(rest, "assert-segment-selected");
+
+        if (actual != expected)
+            throw new AssertionException($"expected segment {expected} to be selected, got {actual}.");
+    }
+
+    private void AssertNoSegmentSelected()
+    {
+        var actual = session.Dispatcher.Invoke(() => session.Model.SelectedSegment);
+
+        if (actual is not null)
+            throw new AssertionException($"expected no selection, segment {actual} is selected.");
     }
 
     private void AssertMuted(string rest, bool expected)

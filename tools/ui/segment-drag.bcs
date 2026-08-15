@@ -1,0 +1,86 @@
+# Picking a piece of the film off the strip: selecting it, dragging it into a different
+# running order, deleting it.
+#
+# Like overlay-drag.bcs, every press here goes through TimelineControl's own pointer methods
+# at points it works out from frame numbers — so the hit test and the drag threshold are
+# under test, not stepped around.
+
+sample clip.mp4 6
+open clip.mp4
+
+# One 180-frame segment to start with. Splitting at 60 and 120 makes three of 60 each; the
+# alternating fills in the strip are the seams.
+assert-segments 1
+goto 60
+key S
+goto 120
+key S
+assert-segments 3
+shot 01-split
+
+# A click on the track picks the segment out and leaves the playhead alone: one lane for
+# clips, another for time.
+assert-no-segment-selected
+goto 150
+select-segment 90
+assert-segment-selected 1
+assert-frame 150
+shot 02-selected
+
+# The ruler is one of the two lanes that do move it — and a press there lets go of the
+# selection, which is how you put a clip down.
+scrub 30
+assert-no-segment-selected
+assert-frame-between 28 30
+
+# Drag the middle segment past the last one. It moves a place at a time, once the pointer is
+# past the middle of what it is invading, and ends up third.
+select-segment 90
+drag-segment 90 170
+assert-segment-selected 2
+assert-segments 3
+shot 03-reordered
+
+# The whole drag is one undo step, however many places it walked.
+key Ctrl+Z
+select-segment 90
+assert-segment-selected 1
+
+# Delete ripples the selected segment away and closes the gap: 180 frames become 120.
+key Delete
+assert-segments 2
+assert-status Removed
+assert-no-segment-selected
+state
+shot 04-deleted
+
+key Ctrl+Z
+assert-segments 3
+
+# A short press with no travel is still just a click: it picks a segment out and rearranges
+# nothing. This is the gesture the drag threshold protects.
+goto 150
+select-segment 30
+assert-segment-selected 0
+assert-segments 3
+assert-frame 150
+
+# One selection at a time. Placing an overlay over the first segment and clicking its band
+# lets go of the segment.
+goto 0
+key I
+goto 60
+key O
+key P
+key Enter
+goto 30
+select-overlay 30
+assert-overlay-selected 0
+assert-no-segment-selected
+shot 05-overlay-takes-over
+
+# And clicking the track below it takes the selection back.
+select-segment 90
+assert-segment-selected 1
+assert-no-overlay-selected
+state

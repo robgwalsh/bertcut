@@ -41,6 +41,8 @@ csproj**, or the output lands in `bin\Debug\` and you run a stale binary.
 
 ```powershell
 & $harness --script C:\Source\bertcut\tools\ui\smoke.bcs           # the canonical pass
+& $harness --script C:\Source\bertcut\tools\ui\overlay-drag.bcs    # overlay clips, by pointer
+& $harness --script C:\Source\bertcut\tools\ui\segment-drag.bcs    # base segments, by pointer
 & $harness -c "sample c.mp4 6; open c.mp4; goto 90; shot check"    # ad hoc
 ```
 
@@ -58,18 +60,46 @@ sample-angles <path> [sec]  one clip holding the same event twice, the second ti
 open|import|append <path>
 key <gesture>               through the live key map:  key I  ·  key Ctrl+Z  ·  key >
 intent <EditorIntent>       straight to the window's single dispatch point
+select-overlay <frame>      press and release on that overlay's band in the timeline strip
+drag-overlay <from> <to>    press on the band at <from> and drag until the grabbed point is
+                            over <to> — through the control's own hit test, in steps, as a
+                            mouse would. No OS input is synthesised.
+trim-overlay start|end <to> drag that end of the *selected* clip to <to>. Pressing on an end
+                            trims; pressing in the middle moves. Same hit test either way.
+select-segment <frame>      click the base track there, which picks that segment out. It
+                            does not move the playhead — only `scrub` and `goto` do.
+drag-segment <from> <to>    drag that segment along the track, which reorders the film. Goes
+                            through the drag threshold rather than around it.
+scrub <frame>               click the ruler above the track — seeks and deselects, which is
+                            the only way to test that clicking off a clip lets go of it
 goto <frame> | play | stop | tick [n] | sleep <ms> | reset | close | settle [ms]
 shot <name> [element]       PNG of the window, or of any x:Name'd element
 dump-preview <name>.png     the composited video frame alone, no interface around it
 state                       one JSON line of everything worth asserting on
 assert-status <substring> | assert-timecode <text> | assert-frame <n>
 assert-frame-between <a> <b> | assert-visible <Name> | assert-hidden <Name>
-assert-overlay-source-start <a> [b]   where the overlay under the playhead reads from in
-                                      its own source — what the audio sync moves
+assert-overlay-source-start <a> [b]   where the overlay in question reads from in its own
+                                      source — what the audio sync moves, and what a trim of
+                                      the front end has to carry with it
+assert-overlay-start <a> [b] | assert-overlay-end <a> [b]
+                                      what it covers on the timeline
+assert-overlay-selected [index] | assert-no-overlay-selected | assert-overlays <n>
+assert-segment-selected [index] | assert-no-segment-selected | assert-segments <n>
 assert-muted | assert-unmuted
 assert-has-media | assert-no-media | assert-unlocked <path>
 echo <text>                 '#' at the start of a line is a comment
 ```
+
+"The overlay in question" is the selected one, falling back to the one under the playhead.
+Selecting is how you say which clip you mean — trimming a clip's front takes it out from
+under the playhead as often as not.
+
+**Where a press lands decides what it does.** The ruler above the track and the waveform
+below it are the only lanes that move the playhead; the track selects a base segment; the
+green band along the bottom of the track is an overlay, whose ends trim and whose middle
+moves. Selecting anything leaves the playhead exactly where it was, so a script that needs
+both must say both. The four commands above aim at those lanes for you — `scrub`,
+`select-segment`, `select-overlay`, `trim-overlay` — so it never has to know the geometry.
 
 Options: `--out <dir>` · `--state-dir <dir>` · `--keep-state` · `--timeout <sec>` ·
 `--busy-timeout <ms>` · `--keep-going` · `--audio` · `--verbose`
@@ -78,7 +108,10 @@ Element names come straight from `MainWindow.xaml`: `Toolbar`, `ClearButton`, `R
 `PreviewImage`, `EmptyHint`, `Placement`, `RestoreToast`, `TransportRow`, `TransportControls`,
 `PlayButton`, `StopButton`, `MuteButton`, `TimecodeLabel`, `SelectionLabel`, `TransportLabel`,
 `Timeline`, `TransportIcon`, `StatusLabel`, `HintLabel`, `HelpOverlay`, `HelpCard`, `HelpList`,
-`SettingsOverlay`, `Settings`.
+`StripHelp`, `SettingsOverlay`, `Settings`.
+
+`StripHelp` is the help sheet's section on what a click does where — it sits below the fold
+of a sheet a script cannot scroll, so capture it on its own: `shot strip StripHelp`.
 
 **A run makes no sound** unless you pass `--audio`. The harness injects a null sink, so the
 whole playback path still runs — decoders, segment boundaries, the clock the playhead follows

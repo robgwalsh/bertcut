@@ -70,6 +70,76 @@ public static class TimelineEdits
         };
     }
 
+    /// <summary>Ripples one base segment out of the timeline.</summary>
+    /// <remarks>
+    /// A segment's range already lies on segment boundaries, so this is a ripple delete that
+    /// happens to split nothing — which is the point of expressing it as one. Deleting a
+    /// segment and marking its exact range and pressing X are then the same operation, and
+    /// there is no second implementation of "close the gap" to keep in step with the first.
+    /// </remarks>
+    public static Project RemoveSegment(Project p, int index) =>
+        index < 0 || index >= p.Base.Length ? p : RippleDelete(p, p.Base[index].Timeline);
+
+    /// <summary>
+    /// Moves one base segment to another position in the running order.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The crops and overlays ride along. They are addressed by timeline range rather than
+    /// attached to a segment, so left alone they would stay where they are on the clock while
+    /// the picture moved out from under them — a crop framing a face would end up zooming
+    /// into whatever took that stretch of time instead. What the user placed it on is what it
+    /// belongs to.
+    /// </para>
+    /// <para>
+    /// A span covering two segments that are being separated is cut in two, each half
+    /// travelling with the segment beneath it. For an overlay that means its source in-point
+    /// moves with the second half, exactly as it does when a ripple delete cuts through one.
+    /// Adjacent crop halves that end up touching again are merged back by
+    /// <see cref="Coalesce"/>.
+    /// </para>
+    /// </remarks>
+    public static Project MoveSegment(Project p, int index, int destination)
+    {
+        if (index < 0 || index >= p.Base.Length) return p;
+
+        destination = Math.Clamp(destination, 0, p.Base.Length - 1);
+        if (index == destination) return p;
+
+        var order = p.Base.RemoveAt(index).Insert(destination, p.Base[index]);
+
+        // Re-run the prefix sum, keeping each block's old range beside its new start — that
+        // pairing is the whole map from the old timeline to the new one.
+        var segments = ImmutableArray.CreateBuilder<BaseSegment>(order.Length);
+        var blocks = new List<(FrameRange From, long To)>(order.Length);
+        long start = 0;
+
+        foreach (var segment in order)
+        {
+            blocks.Add((segment.Timeline, start));
+            segments.Add(segment with { TimelineStart = start });
+            start += segment.LengthFrames;
+        }
+
+        var crops = Remap(p.Crops, blocks, static c => c.Range, static (c, range, _) => c with { Range = range });
+
+        var overlays = Remap(
+            p.Overlays, blocks,
+            static o => o.Range,
+            (o, range, consumed) => o with
+            {
+                Range = range,
+                SourceStartFrame = o.SourceStartFrame + ToSourceFrames(p, p.RequireSource(o.SourceId), consumed),
+            });
+
+        return p with
+        {
+            Base = segments.ToImmutable(),
+            Crops = Coalesce(crops),
+            Overlays = overlays,
+        };
+    }
+
     /// <summary>Splits the base segment containing <paramref name="frame"/> at that frame.</summary>
     /// <remarks>
     /// Splitting is the primitive that crop reuses: applying a crop to a range is a split
@@ -138,13 +208,161 @@ public static class TimelineEdits
     {
         for (var i = 0; i < p.Overlays.Length; i++)
             if (p.Overlays[i].Range.Contains(frame))
-                return p with { Overlays = p.Overlays.RemoveAt(i) };
+                return RemoveOverlay(p, i);
         return p;
     }
+
+    /// <summary>Removes one overlay by position in the list.</summary>
+    /// <remarks>
+    /// What the delete key uses once a clip has been picked out on the strip: the selection
+    /// is an index, and asking for "the overlay at frame n" to find it again would go looking
+    /// for a clip the user has already pointed at.
+    /// </remarks>
+    public static Project RemoveOverlay(Project p, int index) =>
+        p with { Overlays = p.Overlays.RemoveAt(index) };
 
     /// <summary>Repositions or resizes an overlay.</summary>
     public static Project MoveOverlay(Project p, int index, RectI dest) =>
         p with { Overlays = p.Overlays.SetItem(index, p.Overlays[index] with { Dest = dest }) };
+
+    /// <summary>
+    /// Slides an overlay along the timeline, keeping its length and what it shows.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Clamped into the gap between its neighbours and the ends of the timeline rather than
+    /// allowed to overwrite anything. <see cref="AddOverlay"/> truncates whatever it lands on,
+    /// which is right for a placement committed once; it is wrong for a drag, where every
+    /// mouse-move is an edit and a clip pushed across its neighbour would eat it a few frames
+    /// at a time. A clip that will not go where the pointer is stops against what is in the
+    /// way, which is also the only feedback the strip can give that something is there.
+    /// </para>
+    /// <para>
+    /// <see cref="OverlayClip.SourceStartFrame"/> deliberately does not follow. Moving a clip
+    /// changes when it plays, not what it shows; sliding its content against the base track is
+    /// what <see cref="SetOverlaySourceStart"/> is for.
+    /// </para>
+    /// </remarks>
+    public static Project SetOverlayStart(Project p, int index, long timelineStart)
+    {
+        var clip = p.Overlays[index];
+        var length = clip.Range.Length;
+
+        var earliest = index > 0 ? p.Overlays[index - 1].Range.End : 0;
+        var latest = (index < p.Overlays.Length - 1
+            ? p.Overlays[index + 1].Range.Start
+            : p.DurationFrames) - length;
+
+        // Nowhere to go: the clip already fills the gap it is in, to the frame.
+        if (latest < earliest) return p;
+
+        var start = Math.Clamp(timelineStart, earliest, latest);
+        if (start == clip.Range.Start) return p;
+
+        return p with
+        {
+            Overlays = p.Overlays.SetItem(index, clip with { Range = FrameRange.FromLength(start, length) }),
+        };
+    }
+
+    /// <summary>The shortest an overlay can be trimmed to.</summary>
+    /// <remarks>
+    /// One frame rather than nothing: a zero-length clip is not a clip, and an edge dragged
+    /// past its opposite number should stop rather than delete something the user was still
+    /// holding on to. The delete key is how a clip goes away.
+    /// </remarks>
+    public const long MinimumOverlayFrames = 1;
+
+    /// <summary>
+    /// Moves an overlay's in-point on the timeline, keeping what it shows where it is.
+    /// </summary>
+    /// <remarks>
+    /// The other half of <see cref="SetOverlayStart"/>: that one slides the whole clip, this
+    /// one pulls its front edge, so the frames the clip still covers must go on showing
+    /// exactly what they showed before — which means the source in-point travels with the
+    /// edge. Bounded by the neighbour behind it and by how much of the source sits in front
+    /// of the in-point, because a clip cannot start before its own footage does.
+    /// </remarks>
+    public static Project TrimOverlayStart(Project p, int index, long timelineStart)
+    {
+        var clip = p.Overlays[index];
+        var source = p.RequireSource(clip.SourceId);
+
+        var earliest = Math.Max(
+            index > 0 ? p.Overlays[index - 1].Range.End : 0,
+            clip.Range.Start - ToOutputFrames(p, source, clip.SourceStartFrame));
+
+        var latest = clip.Range.End - MinimumOverlayFrames;
+        if (latest < earliest) return p;
+
+        var start = Math.Clamp(timelineStart, earliest, latest);
+        if (start == clip.Range.Start) return p;
+
+        var sourceStart = clip.SourceStartFrame + ToSourceFrames(p, source, start - clip.Range.Start);
+
+        return p with
+        {
+            Overlays = p.Overlays.SetItem(index, clip with
+            {
+                Range = new FrameRange(start, clip.Range.End),
+                SourceStartFrame = Math.Max(0, sourceStart),
+            }),
+        };
+    }
+
+    /// <summary>
+    /// Moves an overlay's out-point on the timeline.
+    /// </summary>
+    /// <remarks>
+    /// Nothing about the content moves — the clip still starts where it started and still
+    /// reads from the same place — so this is the simpler edge. It stops against the
+    /// neighbour ahead of it and against the end of its own source, which is the frame after
+    /// which extending it would show a still.
+    /// </remarks>
+    public static Project TrimOverlayEnd(Project p, int index, long timelineEnd)
+    {
+        var clip = p.Overlays[index];
+        var source = p.RequireSource(clip.SourceId);
+
+        var earliest = clip.Range.Start + MinimumOverlayFrames;
+
+        var room = Math.Min(
+            index < p.Overlays.Length - 1 ? p.Overlays[index + 1].Range.Start : p.DurationFrames,
+            clip.Range.Start + ToOutputFrames(p, source, Math.Max(0, source.FrameCount - clip.SourceStartFrame)));
+
+        // Never shorter than it already is: a clip that somehow outruns its source can still
+        // be pulled in, which is the only way out of that state.
+        var latest = Math.Max(clip.Range.End, room);
+        if (latest < earliest) return p;
+
+        var end = Math.Clamp(timelineEnd, earliest, latest);
+        if (end == clip.Range.End) return p;
+
+        return p with
+        {
+            Overlays = p.Overlays.SetItem(index, clip with { Range = new FrameRange(clip.Range.Start, end) }),
+        };
+    }
+
+    /// <summary>
+    /// Converts a count of a source's own frames into output frames, and back.
+    /// </summary>
+    /// <remarks>
+    /// An overlay's source is frequently not the base video — the case the feature exists for
+    /// is a second camera — so it is frequently not at the project's rate either. The resolver
+    /// already rescales when it reads a clip; these two exist so the limits on trimming one
+    /// agree with what it will actually be able to show. Both floor, so neither can claim a
+    /// frame that is not there.
+    /// </remarks>
+    private static long ToOutputFrames(Project p, SourceMedia source, long frames) =>
+        source.FrameRate.EquivalentTo(p.Output.FrameRate)
+            ? frames
+            : RationalMath.RescaleFloor(frames, source.FrameRate.Inverse, p.Output.FrameRate.Inverse);
+
+    private static long ToSourceFrames(Project p, SourceMedia source, long frames) =>
+        source.FrameRate.EquivalentTo(p.Output.FrameRate)
+            ? frames
+            : RationalMath.RescaleFloor(frames, p.Output.FrameRate.Inverse, source.FrameRate.Inverse);
 
     /// <summary>Toggles an overlay clip's audio.</summary>
     /// <remarks>
@@ -265,6 +483,47 @@ public static class TimelineEdits
             if (r.End > range.End) result.Add(withRange(span, new FrameRange(range.End, r.End)));
         }
 
+        return result.ToImmutable();
+    }
+
+    /// <summary>
+    /// Rewrites a span list through a rearrangement of the base track.
+    /// </summary>
+    /// <param name="blocks">Each moved block's old range, and where it now starts.</param>
+    /// <param name="withRange">
+    /// Rebuilds a span at its new range. The third argument is how far into the original span
+    /// the piece begins, which is what an overlay's source in-point has to advance by.
+    /// </param>
+    /// <remarks>
+    /// The blocks partition the timeline and only change order, so this is a permutation of
+    /// frames: every span comes out with the same total length it went in with, and the
+    /// result cannot overlap. Sorted on the way out because a span cut in two lands in two
+    /// places that need not be in the order the pieces were produced.
+    /// </remarks>
+    private static ImmutableArray<T> Remap<T>(
+        ImmutableArray<T> spans,
+        List<(FrameRange From, long To)> blocks,
+        Func<T, FrameRange> getRange,
+        Func<T, FrameRange, long, T> withRange)
+    {
+        if (spans.IsEmpty) return spans;
+
+        var result = ImmutableArray.CreateBuilder<T>(spans.Length);
+
+        foreach (var span in spans)
+        {
+            var range = getRange(span);
+
+            foreach (var (from, to) in blocks)
+            {
+                if (range.Intersect(from) is not { } piece) continue;
+
+                var shift = to - from.Start;
+                result.Add(withRange(span, piece.Shift(shift), piece.Start - range.Start));
+            }
+        }
+
+        result.Sort((a, b) => getRange(a).Start.CompareTo(getRange(b).Start));
         return result.ToImmutable();
     }
 

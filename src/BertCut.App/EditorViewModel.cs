@@ -668,6 +668,11 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         _clock.Reset();
         Mode = EditorMode.Normal;
 
+        // So the rebuild below is free to drop the selections: a drag left open would tell it
+        // the index still means something, against a document that no longer exists.
+        EndOverlayDrag();
+        EndSegmentDrag();
+
         _preview?.Dispose();
         _preview = null;
 
@@ -750,14 +755,21 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
             case EditorIntent.MarkIn: MarkIn = Playhead; break;
             case EditorIntent.MarkOut: MarkOut = Playhead; break;
-            case EditorIntent.ClearMarks: MarkIn = null; MarkOut = null; break;
+            // Escape means "never mind", so it lets go of whatever is picked out on the
+            // strip as well as of the marks. Having to learn which of the editor's
+            // selections a key drops would be a distinction without a difference.
+            case EditorIntent.ClearMarks:
+                MarkIn = null;
+                MarkOut = null;
+                ClearOverlaySelection();
+                ClearSegmentSelection();
+                break;
 
             case EditorIntent.RippleDelete: RippleDelete(); break;
             case EditorIntent.SplitAtPlayhead: Apply($"Split at {Format(Playhead)}", p => TimelineEdits.SplitAt(p, Playhead)); break;
             case EditorIntent.ClearCropAtPlayhead: ClearCropAtPlayhead(); break;
-            case EditorIntent.RemoveOverlayAtPlayhead:
-                Apply("Remove overlay", p => TimelineEdits.RemoveOverlayAt(p, Playhead));
-                break;
+            case EditorIntent.RemoveOverlayAtPlayhead: RemoveOverlay(); break;
+            case EditorIntent.DeleteSelection: DeleteSelection(); break;
 
             case EditorIntent.BeginCrop: BeginCrop(); break;
             case EditorIntent.BeginOverlay: BeginOverlay(); break;
@@ -1127,6 +1139,323 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         Status = "No overlay under the playhead.";
     }
 
+    // ---- selecting, moving and trimming an overlay ----------------------------------
+
+    private int? _selectedOverlay;
+    private int? _selectedSegment;
+    private bool _draggingOverlay;
+    private bool _draggingSegment;
+    private OverlayGrip _grip;
+    private long _grabOffset;
+    private int _dragGeneration;
+
+    /// <summary>
+    /// The overlay picked out on the timeline, as an index into <see cref="Project"/>'s list.
+    /// </summary>
+    /// <remarks>
+    /// An index rather than the clip itself, because the clip is a value: every edit rebuilds
+    /// the list, so anything holding a copy would be pointing at a state of the document that
+    /// no longer exists. The index is only meaningful against the current project, which is
+    /// why <see cref="OnDocumentChanged"/> drops it whenever one edit lands — bar the drag
+    /// that is doing the editing, which knows its own clip stayed where it was in the list.
+    /// </remarks>
+    public int? SelectedOverlay
+    {
+        get => _selectedOverlay;
+        private set
+        {
+            if (_selectedOverlay == value) return;
+
+            _selectedOverlay = value;
+            Notify();
+
+            // One selection at a time. Two things lit up at once and a delete key that has to
+            // guess between them is worse than either.
+            if (value is not null) SelectedSegment = null;
+        }
+    }
+
+    /// <summary>The base segment picked out on the timeline, as an index into the track.</summary>
+    /// <remarks>An index, and cleared on every edit, for the same reasons as the overlay's.</remarks>
+    public int? SelectedSegment
+    {
+        get => _selectedSegment;
+        private set
+        {
+            if (_selectedSegment == value) return;
+
+            _selectedSegment = value;
+            Notify();
+
+            if (value is not null) SelectedOverlay = null;
+        }
+    }
+
+    /// <summary>The selected clip, or null when nothing is selected.</summary>
+    public OverlayClip? SelectedOverlayClip =>
+        SelectedOverlay is { } index && index < Project.Overlays.Length ? Project.Overlays[index] : null;
+
+    public void ClearOverlaySelection() => SelectedOverlay = null;
+
+    /// <summary>
+    /// Selects the overlay under <paramref name="frame"/> and begins dragging it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Selecting and dragging are one call because they are one gesture: a click that selects
+    /// is a drag that went nowhere, and there is nothing for a separate "select" to do that
+    /// pressing and releasing without moving does not already do.
+    /// </para>
+    /// <para>
+    /// The grab point is remembered as an offset into the clip, so the clip moves with the
+    /// pointer instead of snapping its start under it — grabbing the middle of an overlay and
+    /// having it jump half its length left is the classic way this gesture is got wrong.
+    /// </para>
+    /// </remarks>
+    /// <param name="index">The clip the strip's hit test landed on.</param>
+    /// <param name="frame">Where along the timeline it was taken hold of.</param>
+    /// <param name="grip">Which part of the clip that was.</param>
+    /// <remarks>
+    /// The index comes from the caller rather than being looked up from the frame, because
+    /// the two disagree at an edge: ranges are half-open, so the last pixel column of a clip
+    /// belongs to a frame the clip does not contain — and that column is exactly where the
+    /// out-point is grabbed. One hit test, in the control that owns the pixels.
+    /// </remarks>
+    /// <returns>True when a drag started, false when there is nothing there to drag.</returns>
+    public bool BeginOverlayDrag(int index, long frame, OverlayGrip grip)
+    {
+        // Not while a crop or overlay is being placed: the pending rectangle owns the
+        // document's next edit, and the strip's job then is scrubbing to see it in context.
+        if (IsPlacing || index < 0 || index >= Project.Overlays.Length) return false;
+
+        ShuttleRate = 0;
+
+        var clip = Project.Overlays[index];
+
+        SelectedOverlay = index;
+        _draggingOverlay = true;
+        _grip = grip;
+        _dragGeneration++;
+
+        // Measured against whichever part is being pulled, so all three gestures are the
+        // same arithmetic: the thing you grabbed ends up under the pointer.
+        _grabOffset = frame - (grip == OverlayGrip.End ? clip.Range.End : clip.Range.Start);
+
+        Status = DescribeOverlay(clip) + " · drag to move it, drag an end to trim it";
+        return true;
+    }
+
+    /// <summary>Moves or trims the overlay being dragged, so the grabbed part follows the pointer.</summary>
+    /// <remarks>
+    /// Every move is a real edit, coalesced onto one undo step by the gesture id: the strip
+    /// draws from the document, and a drag that only previewed itself would need a second
+    /// source of truth for where the clip is.
+    /// </remarks>
+    public void DragOverlayTo(long frame)
+    {
+        if (!_draggingOverlay || SelectedOverlay is not { } index) return;
+        if (index >= Project.Overlays.Length) return;
+
+        var target = frame - _grabOffset;
+        var gesture = $"overlay-drag-{_dragGeneration}";
+
+        switch (_grip)
+        {
+            case OverlayGrip.Start:
+                Apply("Trim overlay", p => TimelineEdits.TrimOverlayStart(p, index, target), gesture);
+                break;
+
+            case OverlayGrip.End:
+                Apply("Trim overlay", p => TimelineEdits.TrimOverlayEnd(p, index, target), gesture);
+                break;
+
+            default:
+                Apply("Move overlay", p => TimelineEdits.SetOverlayStart(p, index, target), gesture);
+                break;
+        }
+
+        Status = DescribeOverlay(Project.Overlays[index]);
+    }
+
+    /// <summary>Ends the drag, so the next edit starts a fresh undo step.</summary>
+    public void EndOverlayDrag()
+    {
+        if (!_draggingOverlay) return;
+
+        _draggingOverlay = false;
+        _document.EndGesture();
+    }
+
+    // ---- selecting, reordering and removing a base segment --------------------------
+
+    /// <summary>Picks out one piece of the base track.</summary>
+    public void SelectSegment(int index)
+    {
+        if (IsPlacing || index < 0 || index >= Project.Base.Length) return;
+
+        SelectedSegment = index;
+        Status = DescribeSegment(index) + " · drag it to move it in the running order";
+    }
+
+    public void ClearSegmentSelection() => SelectedSegment = null;
+
+    /// <summary>Begins reordering the selected segment.</summary>
+    /// <remarks>
+    /// Called once the pointer has actually travelled, not on the press — see the drag
+    /// threshold in <see cref="TimelineControl"/>. A click on the base track has always
+    /// moved the playhead and still does, and it must not also start rearranging the film.
+    /// </remarks>
+    public bool BeginSegmentReorder()
+    {
+        if (IsPlacing || SelectedSegment is null || Project.Base.Length < 2) return false;
+
+        ShuttleRate = 0;
+        _draggingSegment = true;
+        _dragGeneration++;
+        return true;
+    }
+
+    /// <summary>
+    /// Walks the dragged segment towards the pointer, a place at a time.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// It moves only once the pointer is past the <em>middle</em> of the neighbour it is
+    /// invading. Swapping as soon as the pointer entered the neighbour would make two
+    /// segments of different lengths trade places back and forth under a pointer that had
+    /// stopped moving: the swap puts the other one under the pointer, which asks for the
+    /// swap again.
+    /// </para>
+    /// <para>
+    /// A loop rather than a single step, because the pointer can arrive several places away
+    /// — a fast drag delivers few moves, and a scripted one delivers exactly as many as it
+    /// was told to.
+    /// </para>
+    /// </remarks>
+    public void DragSegmentTo(long frame)
+    {
+        if (!_draggingSegment || SelectedSegment is not { } index) return;
+
+        while (true)
+        {
+            var track = Project.Base;
+            if (index >= track.Length) return;
+
+            int destination;
+
+            if (index + 1 < track.Length && frame >= Middle(track[index + 1])) destination = index + 1;
+            else if (index > 0 && frame < Middle(track[index - 1])) destination = index - 1;
+            else break;
+
+            var from = index;
+            var to = destination;
+
+            Apply("Move segment", p => TimelineEdits.MoveSegment(p, from, to), $"segment-drag-{_dragGeneration}");
+
+            // The document is what says where the segment is now, and the selection has to
+            // follow it or the next step would move somebody else.
+            index = destination;
+            SelectedSegment = index;
+        }
+
+        Status = DescribeSegment(index);
+    }
+
+    public void EndSegmentDrag()
+    {
+        if (!_draggingSegment) return;
+
+        _draggingSegment = false;
+        _document.EndGesture();
+    }
+
+    private static long Middle(BaseSegment segment) => segment.TimelineStart + (segment.LengthFrames / 2);
+
+    /// <summary>
+    /// Removes whatever is picked out: a segment ripples away, an overlay comes off the top.
+    /// </summary>
+    /// <remarks>
+    /// With nothing selected this falls back to the overlay under the playhead, which is what
+    /// the delete key did before there was anything to select. It deliberately does not fall
+    /// back to the <em>segment</em> under the playhead: there is always one of those, so the
+    /// key would never be a no-op, and an unaimed press would ripple away whatever the
+    /// playhead happened to be parked on.
+    /// </remarks>
+    private void DeleteSelection()
+    {
+        if (SelectedSegment is { } segment && segment < Project.Base.Length)
+        {
+            var name = DescribeSegment(segment);
+
+            Apply("Remove segment", p => TimelineEdits.RemoveSegment(p, segment));
+
+            // The playhead follows the cut, as it does after a ripple delete — it is where
+            // the join now is, and where the next question is.
+            Playhead = Math.Min(Playhead, Math.Max(0, DurationFrames - 1));
+
+            Status = $"Removed {name} — Ctrl+Z to undo";
+            return;
+        }
+
+        RemoveOverlay();
+    }
+
+    private string DescribeSegment(int index)
+    {
+        var segment = Project.Base[index];
+
+        var name = Project.FindSource(segment.SourceId) is { } source
+            ? Path.GetFileName(source.Path)
+            : "segment";
+
+        return $"{name} · {Format(segment.Timeline.Start)} to {Format(segment.Timeline.End)} · " +
+               $"segment {index + 1} of {Project.Base.Length}";
+    }
+
+    private int? IndexOfOverlayAt(long frame)
+    {
+        for (var i = 0; i < Project.Overlays.Length; i++)
+            if (Project.Overlays[i].Range.Contains(frame))
+                return i;
+
+        return null;
+    }
+
+    private string DescribeOverlay(OverlayClip clip)
+    {
+        var name = Project.FindSource(clip.SourceId) is { } source
+            ? Path.GetFileName(source.Path)
+            : "overlay";
+
+        // The length as well as the two ends, because during a trim it is the number that is
+        // actually being chosen — the edge position is only how it is being said.
+        return $"{name} · {Format(clip.Range.Start)} to {Format(clip.Range.End)} · " +
+               $"{Format(clip.Range.Length)} long";
+    }
+
+    /// <summary>
+    /// Removes the selected overlay, or the one under the playhead.
+    /// </summary>
+    /// <remarks>
+    /// The selection wins: having pointed at a clip, the user has already said which one they
+    /// mean, and the playhead is very often somewhere else entirely by then. With nothing
+    /// selected this is what the key has always done.
+    /// </remarks>
+    private void RemoveOverlay()
+    {
+        if ((SelectedOverlay ?? IndexOfOverlayAt(Playhead)) is not { } index
+            || index >= Project.Overlays.Length)
+        {
+            Status = "No overlay selected or under the playhead.";
+            return;
+        }
+
+        var name = DescribeOverlay(Project.Overlays[index]);
+
+        Apply("Remove overlay", p => TimelineEdits.RemoveOverlay(p, index));
+        Status = $"Removed {name} — Ctrl+Z to undo";
+    }
+
     private int FramesPerSecond => Math.Max(1, (int)Math.Round(Project.Output.FrameRate.Approx));
 
     private void RippleDelete()
@@ -1171,9 +1500,13 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     public void SetCrop(FrameRange range, RectI rect) =>
         Apply("Crop", p => TimelineEdits.SetCrop(p, range, rect));
 
-    public void Apply(string label, Func<Project, Project> edit)
+    /// <param name="gestureId">
+    /// Names a continuing gesture, so the drag of an overlay leaves one undo step rather than
+    /// one per mouse-move. See <see cref="EditorDocument.Apply"/>.
+    /// </param>
+    public void Apply(string label, Func<Project, Project> edit, string? gestureId = null)
     {
-        _document.Apply(label, edit);
+        _document.Apply(label, edit, gestureId);
         Status = label;
     }
 
@@ -1368,6 +1701,13 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         // Each consumer builds its own resolver because the hint cache inside one is not
         // shareable; rebuilding is trivial.
         _resolver = new TimelineResolver(project);
+
+        // A selection is an index into a list, and an edit is free to renumber it: a ripple
+        // delete drops clips, an undo brings others back, and the index would then be
+        // pointing at somebody else's. The two callers that know better are the drags, which
+        // keep their own index in step with what they are rewriting.
+        if (!_draggingOverlay) SelectedOverlay = null;
+        if (!_draggingSegment) SelectedSegment = null;
 
         if (_playhead >= project.DurationFrames)
             _playhead = Math.Max(0, project.DurationFrames - 1);
