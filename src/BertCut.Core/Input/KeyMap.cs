@@ -8,14 +8,19 @@ namespace BertCut.Core.Input;
 /// the key map stays unit-testable and Core stays free of a UI framework dependency. The
 /// app translates WPF keys into these at the edge.
 /// </remarks>
+/// <remarks>
+/// The whole keyboard is listed, not just the keys the defaults use: every one of these is
+/// a key the user can rebind an action onto from the Controls page, and a key missing here
+/// is a key that silently does nothing when they press it.
+/// </remarks>
 public enum EditorKey
 {
     None,
-    Space, Left, Right, Up, Down, Home, End, Enter, Escape, Delete,
-    A, C, E, I, J, K, L, M, O, P, S, V, X, Y, Z,
-    D1, D2, D3, D4, D5,
-    Minus, Equals, Backslash, Comma, Period,
-    F1,
+    Space, Left, Right, Up, Down, Home, End, Enter, Escape, Delete, Insert, Tab, PageUp, PageDown,
+    A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
+    D0, D1, D2, D3, D4, D5, D6, D7, D8, D9,
+    F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
+    Minus, Equals, Backslash, Comma, Period, Semicolon, Quote, LeftBracket, RightBracket, Slash, Backtick,
 }
 
 [Flags]
@@ -71,7 +76,7 @@ public enum EditorIntent
     AppendSource,
 
     ZoomIn, ZoomOut, ZoomToFit,
-    ToggleHelp,
+    ToggleHelp, ToggleSettings,
 }
 
 /// <summary>One binding, for both dispatch and the on-screen cheat sheet.</summary>
@@ -95,11 +100,20 @@ public sealed record KeyBinding(
 /// BertCut has no razor tool — a case where removing a feature bought ergonomics.
 /// </para>
 /// <para>
-/// There is no Ctrl+S. Autosave is the contract, and a Save key would imply it isn't.
+/// There is no Ctrl+S. Autosave is the contract, and a Save key would imply it isn't. The
+/// toolbar's Save as is a different thing wearing a familiar icon — it writes a finished
+/// video out, and never touches the file you opened — and it stays on Ctrl+E for that
+/// reason.
+/// </para>
+/// <para>
+/// This map is the <i>defaults</i>. What the app actually dispatches against is a
+/// <see cref="KeyBindings"/> built from it, which layers the user's own choices from the
+/// Controls page on top — so everything below is a starting point rather than a fact.
 /// </para>
 /// </remarks>
 public static class KeyMap
 {
+    /// <summary>The bindings BertCut ships with, before any customization.</summary>
     public static readonly IReadOnlyList<KeyBinding> Bindings =
     [
         // Playback and navigation
@@ -125,7 +139,7 @@ public static class KeyMap
         new(EditorKey.X, EditorModifiers.None, EditorMode.Normal, EditorIntent.RippleDelete, "Ripple delete the marked range"),
         new(EditorKey.Delete, EditorModifiers.Shift, EditorMode.Normal, EditorIntent.RippleDelete, "Ripple delete the marked range"),
         new(EditorKey.S, EditorModifiers.None, EditorMode.Normal, EditorIntent.SplitAtPlayhead, "Split at the playhead"),
-        new(EditorKey.C, EditorModifiers.None, EditorMode.Normal, EditorIntent.BeginCrop, "Crop the marked range"),
+        new(EditorKey.C, EditorModifiers.None, EditorMode.Normal, EditorIntent.BeginCrop, "Crop the marked range, or the whole video if nothing is marked"),
         new(EditorKey.C, EditorModifiers.Shift, EditorMode.Normal, EditorIntent.ClearCropAtPlayhead, "Clear the crop under the playhead"),
         new(EditorKey.P, EditorModifiers.None, EditorMode.Normal, EditorIntent.BeginOverlay, "Place an overlay over the marked range"),
         new(EditorKey.P, EditorModifiers.Shift, EditorMode.Normal, EditorIntent.RemoveOverlayAtPlayhead, "Remove the overlay under the playhead"),
@@ -147,11 +161,12 @@ public static class KeyMap
         new(EditorKey.O, EditorModifiers.Control, EditorMode.Normal, EditorIntent.OpenFile, "Open a video"),
         new(EditorKey.I, EditorModifiers.Control, EditorMode.Normal, EditorIntent.ImportSource, "Import another video to overlay"),
         new(EditorKey.A, EditorModifiers.Control, EditorMode.Normal, EditorIntent.AppendSource, "Add a video to the end of the timeline"),
-        new(EditorKey.E, EditorModifiers.Control, EditorMode.Normal, EditorIntent.Export, "Export"),
+        new(EditorKey.E, EditorModifiers.Control, EditorMode.Normal, EditorIntent.Export, "Save as — write the edited video to a new file"),
         new(EditorKey.Equals, EditorModifiers.None, EditorMode.Normal, EditorIntent.ZoomIn, "Zoom in"),
         new(EditorKey.Minus, EditorModifiers.None, EditorMode.Normal, EditorIntent.ZoomOut, "Zoom out"),
         new(EditorKey.Backslash, EditorModifiers.None, EditorMode.Normal, EditorIntent.ZoomToFit, "Zoom to fit"),
         new(EditorKey.F1, EditorModifiers.None, EditorMode.Normal, EditorIntent.ToggleHelp, "Show / hide shortcuts"),
+        new(EditorKey.Comma, EditorModifiers.Control, EditorMode.Normal, EditorIntent.ToggleSettings, "Settings"),
     ];
 
     /// <summary>
@@ -179,50 +194,41 @@ public static class KeyMap
         new(EditorKey.D5, EditorModifiers.None, mode, EditorIntent.SnapCenter, "Centre"),
     ];
 
+    /// <summary>Resolves a keystroke against the defaults.</summary>
+    /// <remarks>
+    /// The app resolves against <see cref="KeyBindings"/> instead, so that a user who has
+    /// moved a key gets what they moved it to. This overload is the unconfigured answer.
+    /// </remarks>
+    public static EditorIntent Resolve(EditorKey key, EditorModifiers modifiers, EditorMode mode) =>
+        KeyBindings.Default.Resolve(key, modifiers, mode);
+
+    /// <summary>Default bindings grouped for the cheat sheet, in presentation order.</summary>
+    public static IEnumerable<IGrouping<string, KeyBinding>> ForHelp() => KeyBindings.Default.ForHelp();
+
     /// <summary>
-    /// Resolves a keystroke, preferring a binding for the current mode over the Normal one.
+    /// Which section of the help sheet and the Controls page a binding belongs to.
     /// </summary>
-    public static EditorIntent Resolve(EditorKey key, EditorModifiers modifiers, EditorMode mode)
-    {
-        // < and > are typed as Shift + comma and Shift + period, so on these two keys the
-        // shift is how you produce the character rather than part of the gesture. Both are
-        // bound shift-agnostically, which means the frame-step keys answer to whichever of
-        // the two the user thinks they are pressing.
-        if (key is EditorKey.Comma or EditorKey.Period) modifiers &= ~EditorModifiers.Shift;
+    /// <remarks>
+    /// Mode does the first cut: everything bound inside a placement mode is about moving a
+    /// box around, whatever its intent. Only the Normal-mode bindings are sorted by what
+    /// they do.
+    /// </remarks>
+    public static string Category(KeyBinding binding) => binding.Mode != EditorMode.Normal
+        ? "Place a box"
+        : binding.Intent switch
+        {
+            EditorIntent.PlayPause or EditorIntent.ShuttleForward or EditorIntent.ShuttleReverse
+                or EditorIntent.Stop or EditorIntent.StepBack or EditorIntent.StepForward
+                or EditorIntent.StepBackSecond or EditorIntent.StepForwardSecond
+                or EditorIntent.PreviousEdit or EditorIntent.NextEdit
+                or EditorIntent.GoToStart or EditorIntent.GoToEnd => "Navigate",
 
-        foreach (var binding in Bindings)
-            if (binding.Key == key && binding.Modifiers == modifiers && binding.Mode == mode)
-                return binding.Intent;
+            EditorIntent.MarkIn or EditorIntent.MarkOut or EditorIntent.ClearMarks
+                or EditorIntent.RippleDelete or EditorIntent.SplitAtPlayhead
+                or EditorIntent.BeginCrop or EditorIntent.ClearCropAtPlayhead
+                or EditorIntent.BeginOverlay or EditorIntent.RemoveOverlayAtPlayhead
+                or EditorIntent.ToggleOverlayMute => "Edit",
 
-        // Ctrl+Z and friends should still work while a crop is being positioned.
-        if (mode != EditorMode.Normal)
-            foreach (var binding in Bindings)
-                if (binding.Key == key && binding.Modifiers == modifiers
-                    && binding.Mode == EditorMode.Normal
-                    && binding.Intent is EditorIntent.Undo or EditorIntent.Redo or EditorIntent.ToggleHelp)
-                    return binding.Intent;
-
-        return EditorIntent.None;
-    }
-
-    /// <summary>Bindings grouped for the cheat sheet, in presentation order.</summary>
-    public static IEnumerable<IGrouping<string, KeyBinding>> ForHelp() =>
-        Bindings
-            .Where(b => b.Mode == EditorMode.Normal)
-            .GroupBy(b => b.Intent switch
-            {
-                EditorIntent.PlayPause or EditorIntent.ShuttleForward or EditorIntent.ShuttleReverse
-                    or EditorIntent.Stop or EditorIntent.StepBack or EditorIntent.StepForward
-                    or EditorIntent.StepBackSecond or EditorIntent.StepForwardSecond
-                    or EditorIntent.PreviousEdit or EditorIntent.NextEdit
-                    or EditorIntent.GoToStart or EditorIntent.GoToEnd => "Navigate",
-
-                EditorIntent.MarkIn or EditorIntent.MarkOut or EditorIntent.ClearMarks
-                    or EditorIntent.RippleDelete or EditorIntent.SplitAtPlayhead
-                    or EditorIntent.BeginCrop or EditorIntent.ClearCropAtPlayhead
-                    or EditorIntent.BeginOverlay or EditorIntent.RemoveOverlayAtPlayhead
-                    or EditorIntent.ToggleOverlayMute => "Edit",
-
-                _ => "File and view",
-            });
+            _ => "File and view",
+        };
 }

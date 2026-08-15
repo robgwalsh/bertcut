@@ -1,0 +1,400 @@
+<!--
+    The shell's shared look. This lives at application scope rather than in MainWindow so
+    the settings screen is drawn out of the same box of parts as the editor behind it — one
+    keycap, one card, one button, however many windows and panels end up using them.
+-->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:local="clr-namespace:BertCut.App">
+
+    <!-- ==== text ==================================================================== -->
+
+    <Style x:Key="StatusText" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="#A9B4C2" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <Style x:Key="MonoText" TargetType="TextBlock" BasedOn="{StaticResource StatusText}">
+        <Setter Property="FontFamily" Value="Consolas, Cascadia Mono, monospace" />
+        <Setter Property="Foreground" Value="#E6ECF3" />
+    </Style>
+
+    <Style x:Key="SectionHead" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="#5F6E80" />
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Margin" Value="0,24,0,12" />
+    </Style>
+
+    <Style x:Key="CardTitle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="#EDF2F8" />
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Margin" Value="0,0,0,4" />
+    </Style>
+
+    <Style x:Key="CardBody" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="#909EAF" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="LineHeight" Value="18" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+
+    <Style x:Key="Card" TargetType="Border">
+        <Setter Property="Background" Value="#1A2028" />
+        <Setter Property="BorderBrush" Value="#272F3A" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="Padding" Value="16" />
+        <Setter Property="Margin" Value="0,0,10,10" />
+    </Style>
+
+    <!-- A keystroke, drawn as a key. Used for every gesture the app prints: the help sheet,
+         the Controls page, and every toolbar tooltip. -->
+    <Style x:Key="KeyCap" TargetType="ContentControl">
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ContentControl">
+                    <Border Background="#232B36" BorderBrush="#3B4756" BorderThickness="1"
+                            CornerRadius="4" Padding="8,3" MinWidth="26" SnapsToDevicePixels="True">
+                        <TextBlock Text="{TemplateBinding Content}"
+                                   FontFamily="Consolas, Cascadia Mono, monospace"
+                                   FontSize="12" Foreground="#DDE7F3"
+                                   TextAlignment="Center" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ==== icons ==================================================================== -->
+
+    <!--
+        Drawn as geometry rather than set as glyphs from a symbol font. Every icon is
+        authored in the same 24x24 box, so the toolbar's optical weight is something this
+        file controls instead of something the installed fonts decide.
+    -->
+    <Geometry x:Key="Icon.MarkIn">M4 3 H10.5 V6 H7 V18 H10.5 V21 H4 Z M12.5 3 H20 V21 H12.5 Z</Geometry>
+    <Geometry x:Key="Icon.MarkOut">M4 3 H11.5 V21 H4 Z M13.5 3 H20 V21 H13.5 V18 H17 V6 H13.5 Z</Geometry>
+
+    <!-- Two blocks and a pair of arrows closing the gap between them: the delete and the
+         ripple, which is the part that surprises people. -->
+    <Geometry x:Key="Icon.RippleDelete">M2 6 H8 V18 H2 Z M16 6 H22 V18 H16 Z M9 12 L12 8.6 V15.4 Z M15 12 L12 8.6 V15.4 Z</Geometry>
+
+    <Geometry x:Key="Icon.Split">M3 6 H10.5 V18 H3 Z M13.5 6 H21 V18 H13.5 Z M11.25 2 H12.75 V22 H11.25 Z</Geometry>
+    <Geometry x:Key="Icon.Crop">F1 M7 2 V17 H22 V14.5 H9.5 V2 Z M17 22 V7 H2 V9.5 H14.5 V22 Z</Geometry>
+    <Geometry x:Key="Icon.Overlay">M2 4 H22 V20 H2 Z M4.5 6.5 H19.5 V17.5 H4.5 Z M11.5 11.5 H18.5 V16.5 H11.5 Z</Geometry>
+
+    <Geometry x:Key="Icon.Undo">F1 M11 4 L4.5 9.5 L11 15 V11.6 H12.5 A6,6 0 0 1 18.5,17.6 V20 H21.5 V17.6 A9,9 0 0 0 12.5,8.6 H11 Z</Geometry>
+    <Geometry x:Key="Icon.Redo">F1 M13 4 L19.5 9.5 L13 15 V11.6 H11.5 A6,6 0 0 0 5.5,17.6 V20 H2.5 V17.6 A9,9 0 0 1 11.5,8.6 H13 Z</Geometry>
+
+    <Geometry x:Key="Icon.Add">M2 5 H22 V19 H2 Z M4 7 H20 V17 H4 Z M11 9 H13 V11 H16 V13 H13 V15 H11 V13 H8 V11 H11 Z</Geometry>
+
+    <!--
+        The floppy disk, drawn the way thirty years of save buttons have drawn it: clipped
+        top-right corner, shutter above, label below. Nobody under forty has held one and
+        everybody knows what it means, which is the entire argument for using it.
+
+        Even-odd, so each subpath after the body alternates hole and fill: the frame, the
+        shutter, the slot in the shutter, the label. The inner outline repeats the corner
+        clip rather than squaring it off — a plain rectangle would poke out through the
+        diagonal.
+    -->
+    <Geometry x:Key="Icon.Save">M3 3 H16.5 L21 7.5 V21 H3 Z M5 5 H15.5 L19 8.5 V19 H5 Z M8 5 H14 V10 H8 Z M11.5 6 H13 V9 H11.5 Z M7 13 H17 V19 H7 Z</Geometry>
+
+    <!-- The arrowhead sits in the quadrant the ring leaves open, so the two never overlap
+         and the fill rule stops mattering. -->
+    <Geometry x:Key="Icon.Reset">M12 4.5 A8,8 0 1 1 4,12.5 H7 A5,5 0 1 0 12,7.5 Z M12 3 L12 9 L6.5 6 Z</Geometry>
+
+    <Geometry x:Key="Icon.Settings">F1 M3 5 H21 V7 H3 Z M14 3 H17 V9 H14 Z M3 11 H21 V13 H3 Z M6 9 H9 V15 H6 Z M3 17 H21 V19 H3 Z M15 15 H18 V21 H15 Z</Geometry>
+    <Geometry x:Key="Icon.Help">F1 M12 3 C9.2 3 7 4.4 6.3 7 L9.2 7.9 C9.6 6.5 10.6 5.7 12 5.7 C13.5 5.7 14.6 6.6 14.6 7.9 C14.6 9.2 13.8 9.8 12.4 10.7 C10.8 11.7 10.4 12.8 10.5 14.8 H13.4 C13.4 13.5 13.7 13 15 12.1 C16.7 10.9 17.7 9.9 17.7 7.9 C17.7 5 15.3 3 12 3 Z M10.4 16.6 H13.6 V19.8 H10.4 Z</Geometry>
+    <Geometry x:Key="Icon.Close">M5.5 4 L12 10.5 L18.5 4 L20 5.5 L13.5 12 L20 18.5 L18.5 20 L12 13.5 L5.5 20 L4 18.5 L10.5 12 L4 5.5 Z</Geometry>
+
+    <!-- The same icons at prose size, for the cards on the help sheet. Scaled by layout
+         transform rather than redrawn, so the sheet cannot show an icon the toolbar
+         doesn't. -->
+    <Style x:Key="CardIcon" TargetType="Path">
+        <Setter Property="Width" Value="24" />
+        <Setter Property="Height" Value="24" />
+        <Setter Property="Stretch" Value="None" />
+        <Setter Property="Fill" Value="#C0CCDA" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="LayoutTransform">
+            <Setter.Value>
+                <ScaleTransform ScaleX="0.62" ScaleY="0.62" />
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ==== buttons ================================================================== -->
+
+    <!-- Toolbar buttons are deliberately not focusable. The moment one takes focus the
+         bare-letter shortcuts stop reaching the window's key handler, which is the whole
+         ergonomic premise of this editor. -->
+    <Style x:Key="ToolButton" TargetType="Button">
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="IsTabStop" Value="False" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Foreground" Value="#C6D2E0" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Padding" Value="11,5" />
+        <Setter Property="Margin" Value="0,0,6,0" />
+        <Setter Property="Background" Value="#212730" />
+        <Setter Property="BorderBrush" Value="#2C333D" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Chrome"
+                            CornerRadius="5"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="1"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="#2B323D" />
+                            <Setter TargetName="Chrome" Property="BorderBrush" Value="#3E4756" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="#181D24" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Chrome" Property="Opacity" Value="0.4" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Same shape, but it warms to red on hover: the one button here that throws work
+         away should look different from the ones that make it. -->
+    <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource ToolButton}">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Chrome"
+                            CornerRadius="5"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="1"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="#3A2126" />
+                            <Setter TargetName="Chrome" Property="BorderBrush" Value="#6E3239" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="#2A171B" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Chrome" Property="Opacity" Value="0.4" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!--
+        The one button in this app that says what it is in words.
+
+        Icons with tooltips are right for actions you already know you want, and wrong for
+        the first one — on an empty editor there is no video to hover, nothing to undo, and
+        no way to guess which of nine glyphs is the way in. So exactly one button spells
+        itself out, and it is the one you need before any of the others do anything.
+
+        Sized to the icon buttons rather than to its own content, so the toolbar keeps a
+        single row height whatever is in it.
+    -->
+    <Style x:Key="TextIconButton" TargetType="Button" BasedOn="{StaticResource ToolButton}">
+        <Setter Property="Height" Value="32" />
+        <Setter Property="Padding" Value="11,0" />
+    </Style>
+
+    <!-- The icon inside one, at the same optical weight as the toolbar's glyphs. -->
+    <Style x:Key="ButtonIcon" TargetType="Path" BasedOn="{StaticResource CardIcon}">
+        <Setter Property="Margin" Value="0,0,8,0" />
+        <Setter Property="Fill" Value="#C6D2E0" />
+    </Style>
+
+    <Style x:Key="ButtonLabel" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="#DFE8F3" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <!--
+        A square button whose content is a Geometry. The Viewbox is what keeps the set
+        looking like a set: every icon is laid out in its own 24x24 box and scaled by the
+        same factor, so an icon that happens to be drawn narrow stays narrow instead of
+        being stretched up to match the others.
+    -->
+    <Style x:Key="IconButton" TargetType="Button">
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="IsTabStop" Value="False" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Width" Value="32" />
+        <Setter Property="Height" Value="32" />
+        <Setter Property="Margin" Value="0,0,4,0" />
+        <Setter Property="Foreground" Value="#C0CCDA" />
+        <Setter Property="Background" Value="#212730" />
+        <Setter Property="BorderBrush" Value="#2C333D" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+        <Setter Property="ToolTipService.InitialShowDelay" Value="320" />
+        <Setter Property="ToolTipService.Placement" Value="Bottom" />
+        <Setter Property="ToolTipService.VerticalOffset" Value="6" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Chrome"
+                            CornerRadius="6"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="1">
+                        <Viewbox Width="17" Height="17" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <Path x:Name="Glyph"
+                                  Width="24" Height="24" Stretch="None"
+                                  Data="{TemplateBinding Content}"
+                                  Fill="{TemplateBinding Foreground}" />
+                        </Viewbox>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="#2E3742" />
+                            <Setter TargetName="Chrome" Property="BorderBrush" Value="#424C5C" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="#171C23" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Chrome" Property="Opacity" Value="0.35" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="DangerIconButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
+        <Setter Property="Foreground" Value="#D08A8A" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Chrome"
+                            CornerRadius="6"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="1">
+                        <Viewbox Width="17" Height="17" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <Path x:Name="Glyph"
+                                  Width="24" Height="24" Stretch="None"
+                                  Data="{TemplateBinding Content}"
+                                  Fill="{TemplateBinding Foreground}" />
+                        </Viewbox>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="#3A2126" />
+                            <Setter TargetName="Chrome" Property="BorderBrush" Value="#6E3239" />
+                            <Setter TargetName="Glyph" Property="Fill" Value="#FF8B8B" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="#2A171B" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- A borderless icon button for places that are already inside a panel — the close
+         cross, and the per-row revert on the Controls page. -->
+    <Style x:Key="QuietIconButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
+        <Setter Property="Width" Value="26" />
+        <Setter Property="Height" Value="26" />
+        <Setter Property="Margin" Value="0" />
+        <Setter Property="Foreground" Value="#7C8998" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+    </Style>
+
+    <!-- ==== tooltips ================================================================= -->
+
+    <Style TargetType="ToolTip">
+        <Setter Property="Foreground" Value="#E6ECF3" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToolTip">
+                    <Border Background="#1F262F" BorderBrush="#39434F" BorderThickness="1"
+                            CornerRadius="6" Padding="10,7">
+                        <ContentPresenter />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!--
+        Every toolbar tooltip: what the button does, and the key that does the same thing.
+        The gesture comes from the live key map, so a rebound key is reflected here rather
+        than in a string somebody has to remember to update.
+    -->
+    <DataTemplate DataType="{x:Type local:ShortcutTip}">
+        <StackPanel MaxWidth="260">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="{Binding Name}" Foreground="#EDF2F8" FontSize="12"
+                           FontWeight="SemiBold" VerticalAlignment="Center" />
+                <ContentControl Style="{StaticResource KeyCap}" Content="{Binding Gesture}"
+                                Margin="10,0,0,0" Visibility="{Binding GestureVisibility}" />
+            </StackPanel>
+            <TextBlock Text="{Binding Detail}" Foreground="#8D9BAC" FontSize="11.5"
+                       TextWrapping="Wrap" Margin="0,6,0,0"
+                       Visibility="{Binding DetailVisibility}" />
+        </StackPanel>
+    </DataTemplate>
+
+    <!-- ==== scrolling ================================================================ -->
+
+    <!-- WPF's stock scrollbar is a light-grey slab; on a surface this dark it is the only
+         thing that looks unfinished. -->
+    <Style TargetType="ScrollBar">
+        <Setter Property="Width" Value="8" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ScrollBar">
+                    <Track x:Name="PART_Track" IsDirectionReversed="True" Focusable="False">
+                        <Track.Thumb>
+                            <Thumb Focusable="False">
+                                <Thumb.Template>
+                                    <ControlTemplate TargetType="Thumb">
+                                        <Border CornerRadius="4" Background="#3A4453" />
+                                    </ControlTemplate>
+                                </Thumb.Template>
+                            </Thumb>
+                        </Track.Thumb>
+                        <Track.IncreaseRepeatButton>
+                            <RepeatButton Command="ScrollBar.PageDownCommand"
+                                          Opacity="0" Focusable="False" IsTabStop="False" />
+                        </Track.IncreaseRepeatButton>
+                        <Track.DecreaseRepeatButton>
+                            <RepeatButton Command="ScrollBar.PageUpCommand"
+                                          Opacity="0" Focusable="False" IsTabStop="False" />
+                        </Track.DecreaseRepeatButton>
+                    </Track>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+</ResourceDictionary>

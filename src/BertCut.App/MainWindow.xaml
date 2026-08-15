@@ -2,6 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:BertCut.App"
+        xmlns:input="clr-namespace:BertCut.Core.Input;assembly=BertCut.Core"
         Title="BertCut"
         Height="760" Width="1180"
         Background="#14171B"
@@ -9,144 +10,28 @@
         TextOptions.TextFormattingMode="Display">
 
     <Window.Resources>
-        <Style x:Key="StatusText" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="#A9B4C2" />
-            <Setter Property="FontSize" Value="12" />
-            <Setter Property="VerticalAlignment" Value="Center" />
-        </Style>
-        <Style x:Key="MonoText" TargetType="TextBlock" BasedOn="{StaticResource StatusText}">
-            <Setter Property="FontFamily" Value="Consolas, Cascadia Mono, monospace" />
-            <Setter Property="Foreground" Value="#E6ECF3" />
-        </Style>
-
-        <!-- Toolbar buttons are deliberately not focusable. The moment one takes focus the
-             bare-letter shortcuts stop reaching the window's key handler, which is the whole
-             ergonomic premise of this editor. -->
-        <Style x:Key="ToolButton" TargetType="Button">
-            <Setter Property="Focusable" Value="False" />
-            <Setter Property="IsTabStop" Value="False" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="Foreground" Value="#C6D2E0" />
-            <Setter Property="FontSize" Value="12" />
-            <Setter Property="Padding" Value="11,5" />
-            <Setter Property="Margin" Value="0,0,6,0" />
-            <Setter Property="Background" Value="#212730" />
-            <Setter Property="BorderBrush" Value="#2C333D" />
-            <Setter Property="SnapsToDevicePixels" Value="True" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="Chrome"
-                                CornerRadius="5"
-                                Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="1"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Chrome" Property="Background" Value="#2B323D" />
-                                <Setter TargetName="Chrome" Property="BorderBrush" Value="#3E4756" />
-                            </Trigger>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Chrome" Property="Background" Value="#181D24" />
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="Chrome" Property="Opacity" Value="0.4" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <!-- Same shape, but it warms to red on hover: the one button here that throws work
-             away should look different from the ones that make it. -->
-        <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource ToolButton}">
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="Chrome"
-                                CornerRadius="5"
-                                Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="1"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Chrome" Property="Background" Value="#3A2126" />
-                                <Setter TargetName="Chrome" Property="BorderBrush" Value="#6E3239" />
-                            </Trigger>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Chrome" Property="Background" Value="#2A171B" />
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="Chrome" Property="Opacity" Value="0.4" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <!-- A keystroke, drawn as a key. Used for every gesture in the help sheet, including
-             the ones generated from the key map. -->
-        <Style x:Key="KeyCap" TargetType="ContentControl">
-            <Setter Property="Focusable" Value="False" />
-            <Setter Property="HorizontalAlignment" Value="Left" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ContentControl">
-                        <Border Background="#232B36" BorderBrush="#3B4756" BorderThickness="1"
-                                CornerRadius="4" Padding="8,3" MinWidth="26" SnapsToDevicePixels="True">
-                            <TextBlock Text="{TemplateBinding Content}"
-                                       FontFamily="Consolas, Cascadia Mono, monospace"
-                                       FontSize="12" Foreground="#DDE7F3"
-                                       TextAlignment="Center" />
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <Style x:Key="Card" TargetType="Border">
-            <Setter Property="Background" Value="#1A2028" />
-            <Setter Property="BorderBrush" Value="#272F3A" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="10" />
-            <Setter Property="Padding" Value="16" />
-            <Setter Property="Margin" Value="0,0,10,10" />
-        </Style>
-
-        <Style x:Key="SectionHead" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="#5F6E80" />
-            <Setter Property="FontSize" Value="11" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Margin" Value="0,24,0,12" />
-        </Style>
-
-        <Style x:Key="CardTitle" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="#EDF2F8" />
-            <Setter Property="FontSize" Value="14" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Margin" Value="0,0,0,4" />
-        </Style>
-
-        <Style x:Key="CardBody" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="#909EAF" />
-            <Setter Property="FontSize" Value="12" />
-            <Setter Property="LineHeight" Value="18" />
-            <Setter Property="TextWrapping" Value="Wrap" />
-        </Style>
+        <!-- Everything else this window draws with — the buttons, the keycaps, the cards,
+             the icons — lives in Theme.xaml at application scope, because the settings
+             screen is built out of the same parts. -->
 
         <Storyboard x:Key="HelpIn">
             <DoubleAnimation Storyboard.TargetName="HelpCard"
                              Storyboard.TargetProperty="Opacity"
                              From="0" To="1" Duration="0:0:0.16" />
             <DoubleAnimation Storyboard.TargetName="HelpCard"
+                             Storyboard.TargetProperty="RenderTransform.(TranslateTransform.Y)"
+                             From="18" To="0" Duration="0:0:0.26">
+                <DoubleAnimation.EasingFunction>
+                    <CubicEase EasingMode="EaseOut" />
+                </DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+        </Storyboard>
+
+        <Storyboard x:Key="SettingsIn">
+            <DoubleAnimation Storyboard.TargetName="Settings"
+                             Storyboard.TargetProperty="Opacity"
+                             From="0" To="1" Duration="0:0:0.16" />
+            <DoubleAnimation Storyboard.TargetName="Settings"
                              Storyboard.TargetProperty="RenderTransform.(TranslateTransform.Y)"
                              From="18" To="0" Duration="0:0:0.26">
                 <DoubleAnimation.EasingFunction>
@@ -165,68 +50,140 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <!-- Toolbar: the mouse-reachable half of the app. Everything here also has a
-             keystroke, except the reset, which is deliberately harder to reach. -->
+        <!--
+            Toolbar: the mouse-reachable half of the app. Every button here is the same
+            action the keyboard reaches, dispatched through the same intent — the Tag is
+            what says which — so the two can never drift apart. The reset is the exception:
+            it is the one action with no key, deliberately.
+
+            The three operations carry the colour they are drawn in on the timeline, so the
+            button and the thing it made are the same colour on screen. Everything else
+            stays neutral; a toolbar where everything is accented has no accent.
+
+            Getting a video in and getting one out lead the row, in that order, where a
+            wordmark used to sit. The app's name is already in the title bar and on the help
+            sheet; spending the most legible corner of the window on it, in a one-window app
+            you have already decided to open, bought nothing. The way in is worth more there.
+        -->
         <Border Grid.Row="0" Background="#1A1E24" BorderBrush="#22272E" BorderThickness="0,0,0,1"
                 Padding="10,7">
-            <Grid>
+            <Grid x:Name="Toolbar">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
+                <Grid.Resources>
+                    <Style x:Key="Divider" TargetType="Border">
+                        <Setter Property="Width" Value="1" />
+                        <Setter Property="Background" Value="#262C34" />
+                        <Setter Property="Margin" Value="6,3,10,3" />
+                    </Style>
+                </Grid.Resources>
+
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Ellipse Width="8" Height="8" Fill="#4F9CF5" Margin="4,0,9,0" VerticalAlignment="Center" />
-                    <TextBlock Text="BertCut" Foreground="#E6ECF3" FontSize="13" FontWeight="SemiBold"
-                               VerticalAlignment="Center" Margin="0,0,14,0" />
-                    <Border Width="1" Background="#262C34" Margin="0,1,14,1" />
 
-                    <!-- The content of these buttons is a panel, so without an explicit
-                         automation name a screen reader has nothing to announce. -->
-                    <Button x:Name="AddSegmentButton" Style="{StaticResource ToolButton}"
-                            Click="OnAddSegmentClick"
+                    <!-- The only button here with words in it. See TextIconButton. -->
+                    <Button Style="{StaticResource TextIconButton}" Click="OnActionClick"
+                            Tag="{x:Static input:EditorIntent.AppendSource}"
                             AutomationProperties.Name="Add video"
-                            ToolTip="Add a video to the end of the timeline  (Ctrl+A)">
+                            AutomationProperties.HelpText="Opens a video, or joins one onto the end of the timeline if you already have one.">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="+" Foreground="#6DD48B" FontSize="14" FontWeight="Bold"
-                                       Margin="0,-1,7,0" />
-                            <TextBlock Text="Add video" />
+                            <Path Style="{StaticResource ButtonIcon}" Data="{StaticResource Icon.Add}" />
+                            <TextBlock Style="{StaticResource ButtonLabel}" Text="Add video" />
                         </StackPanel>
                     </Button>
 
-                    <Button x:Name="ExportButton" Style="{StaticResource ToolButton}"
-                            Click="OnExportClick"
-                            AutomationProperties.Name="Export"
-                            ToolTip="Export the edited video  (Ctrl+E)">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#x2193;" Foreground="#4F9CF5" FontSize="14" FontWeight="Bold"
-                                       Margin="0,-1,7,0" />
-                            <TextBlock Text="Export" />
-                        </StackPanel>
-                    </Button>
+                    <Button Style="{StaticResource IconButton}" Click="OnActionClick"
+                            Content="{StaticResource Icon.Save}"
+                            Tag="{x:Static input:EditorIntent.Export}"
+                            AutomationProperties.Name="Save as"
+                            AutomationProperties.HelpText="Write the edited video out to a new file, on the fast path where it can. Your original is never touched." />
 
-                    <Button x:Name="ResetButton" Style="{StaticResource DangerButton}"
-                            Click="OnResetClick"
-                            AutomationProperties.Name="Reset everything"
-                            ToolTip="Discard every edit and go back to the original video">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#x21BA;" Foreground="#FF7A7A" FontSize="13" Margin="0,-1,7,0" />
-                            <TextBlock Text="Reset everything" />
-                        </StackPanel>
-                    </Button>
+                    <Border Style="{StaticResource Divider}" />
+
+                    <!-- The content of these buttons is a shape, so without an explicit
+                         automation name a screen reader has nothing to announce. The same
+                         name is what the tooltip prints. -->
+                    <Button Style="{StaticResource IconButton}" Click="OnActionClick"
+                            Content="{StaticResource Icon.MarkIn}"
+                            Tag="{x:Static input:EditorIntent.MarkIn}"
+                            Foreground="#4F9CF5"
+                            AutomationProperties.Name="Mark in"
+                            AutomationProperties.HelpText="Start of the range you are about to cut, crop or cover." />
+
+                    <Button Style="{StaticResource IconButton}" Click="OnActionClick"
+                            Content="{StaticResource Icon.MarkOut}"
+                            Tag="{x:Static input:EditorIntent.MarkOut}"
+                            Foreground="#4F9CF5"
+                            AutomationProperties.Name="Mark out"
+                            AutomationProperties.HelpText="End of the range. The strip lights up blue between the two." />
+
+                    <Border Style="{StaticResource Divider}" />
+
+                    <Button Style="{StaticResource IconButton}" Click="OnActionClick"
+                            Content="{StaticResource Icon.RippleDelete}"
+                            Tag="{x:Static input:EditorIntent.RippleDelete}"
+                            Foreground="#F27B7B"
+                            AutomationProperties.Name="Ripple delete"
+                            AutomationProperties.HelpText="Cut the marked range out and close the gap behind it." />
+
+                    <Button Style="{StaticResource IconButton}" Click="OnActionClick"
+                            Content="{StaticResource Icon.Split}"
+                            Tag="{x:Static input:EditorIntent.SplitAtPlayhead}"
+                            AutomationProperties.Name="Split"
+                            AutomationProperties.HelpText="Break the timeline in two at the playhead." />
+
+                    <Button Style="{StaticResource IconButton}" Click="OnActionClick"
+                            Content="{StaticResource Icon.Crop}"
+                            Tag="{x:Static input:EditorIntent.BeginCrop}"
+                            Foreground="#F2A14C"
+                            AutomationProperties.Name="Crop and zoom"
+                            AutomationProperties.HelpText="Zoom the marked range to a box you draw. With nothing marked, the whole video." />
+
+                    <Button Style="{StaticResource IconButton}" Click="OnActionClick"
+                            Content="{StaticResource Icon.Overlay}"
+                            Tag="{x:Static input:EditorIntent.BeginOverlay}"
+                            Foreground="#6DD48B"
+                            AutomationProperties.Name="Overlay a clip"
+                            AutomationProperties.HelpText="Picture-in-picture over the marked range." />
+
+                    <Border Style="{StaticResource Divider}" />
+
+                    <Button Style="{StaticResource IconButton}" Click="OnActionClick"
+                            Content="{StaticResource Icon.Undo}"
+                            Tag="{x:Static input:EditorIntent.Undo}"
+                            AutomationProperties.Name="Undo"
+                            AutomationProperties.HelpText="200 levels deep, including a reset." />
+
+                    <Button Style="{StaticResource IconButton}" Click="OnActionClick"
+                            Content="{StaticResource Icon.Redo}"
+                            Tag="{x:Static input:EditorIntent.Redo}"
+                            AutomationProperties.Name="Redo" />
                 </StackPanel>
 
-                <Button Grid.Column="2" Style="{StaticResource ToolButton}" Margin="0"
-                        Click="OnHelpClick"
-                        AutomationProperties.Name="How it works"
-                        ToolTip="How BertCut works  (F1)">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="?" Foreground="#4F9CF5" FontSize="13" FontWeight="Bold"
-                                   Margin="0,-1,7,0" />
-                        <TextBlock Text="How it works" />
-                    </StackPanel>
-                </Button>
+                <!-- What is left on the right is everything that is about the app rather
+                     than about the video: throw the edits away, change the keys, read the
+                     sheet. -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="ResetButton" Style="{StaticResource DangerIconButton}"
+                            Click="OnResetClick"
+                            Content="{StaticResource Icon.Reset}"
+                            AutomationProperties.Name="Reset everything"
+                            AutomationProperties.HelpText="Discard every edit and go back to the video as you opened it. It asks first." />
+
+                    <Button Style="{StaticResource IconButton}" Click="OnActionClick"
+                            Content="{StaticResource Icon.Settings}"
+                            Tag="{x:Static input:EditorIntent.ToggleSettings}"
+                            AutomationProperties.Name="Settings"
+                            AutomationProperties.HelpText="Change what the keys do." />
+
+                    <Button Style="{StaticResource IconButton}" Click="OnActionClick" Margin="0"
+                            Content="{StaticResource Icon.Help}"
+                            Tag="{x:Static input:EditorIntent.ToggleHelp}"
+                            AutomationProperties.Name="How it works" />
+                </StackPanel>
             </Grid>
         </Border>
 
@@ -239,8 +196,9 @@
                        RenderOptions.BitmapScalingMode="HighQuality"
                        SnapsToDevicePixels="True" />
 
+                <!-- Written from the key map at startup and again whenever it changes, so
+                     the first thing a new user reads is the keys they actually have. -->
                 <TextBlock x:Name="EmptyHint"
-                           Text="Ctrl+O to open a video&#x0a;&#x0a;I / O mark in and out · X ripples the marked range away&#x0a;C crops the marked range · P overlays a clip on it&#x0a;Space plays · ← → step a frame · Ctrl+Z undoes&#x0a;F1 for all shortcuts"
                            Foreground="#5C6774"
                            FontSize="14"
                            TextAlignment="Center"
@@ -251,6 +209,51 @@
                 <!-- Crop and PiP handles are WPF content drawn over the video. This is the
                      requirement that ruled out an airspace-bound child window. -->
                 <local:RectEditor x:Name="Placement" />
+
+                <!--
+                    Reopening a video quietly brings back the edits you made to it last
+                    time. That is the right default and a bad surprise: the status bar has
+                    always said so, at the very bottom of the window, in the place nobody
+                    looks in the first second after a video appears. So it is said here too,
+                    over the picture, where the eye already is.
+
+                    Not hit-testable — it sits on top of the preview and the placement
+                    handles, and it must not swallow a drag that was meant for either. The
+                    click that dismisses it is caught at the window instead.
+                -->
+                <Border x:Name="RestoreToast"
+                        Visibility="Collapsed"
+                        IsHitTestVisible="False"
+                        HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                        Margin="16,0,16,20"
+                        Background="#F01C232D" BorderBrush="#36445C" BorderThickness="1"
+                        CornerRadius="9" Padding="15,11">
+                    <Border.RenderTransform>
+                        <TranslateTransform />
+                    </Border.RenderTransform>
+
+                    <StackPanel Orientation="Horizontal">
+                        <Path Style="{StaticResource CardIcon}" Data="{StaticResource Icon.Undo}"
+                              Fill="#7FB4F7" Margin="0,0,12,0" VerticalAlignment="Top" />
+
+                        <StackPanel>
+                            <TextBlock x:Name="RestoreToastTitle"
+                                       Foreground="#EDF2F8" FontSize="12.5" FontWeight="SemiBold"
+                                       TextTrimming="CharacterEllipsis" />
+
+                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                <!-- From the live key map, like everything else in this app
+                                     that prints a key: telling somebody to press Ctrl+Z
+                                     after they have moved undo elsewhere is worse than
+                                     telling them nothing. -->
+                                <ContentControl x:Name="RestoreToastKey" Style="{StaticResource KeyCap}" />
+                                <TextBlock x:Name="RestoreToastHint"
+                                           Foreground="#8D9BAC" FontSize="11.5"
+                                           VerticalAlignment="Center" Margin="9,0,0,0" />
+                            </StackPanel>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
             </Grid>
         </Border>
 
@@ -339,50 +342,13 @@
                         </StackPanel>
 
                         <Button HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0"
-                                Style="{StaticResource ToolButton}" Content="&#x2715;"
-                                AutomationProperties.Name="Close"
-                                Padding="9,4" Click="OnHelpCloseClick" />
+                                Style="{StaticResource QuietIconButton}"
+                                Content="{StaticResource Icon.Close}"
+                                AutomationProperties.Name="Close" Click="OnHelpCloseClick" />
                     </Grid>
 
                     <ScrollViewer Grid.Row="1" Margin="30,4,20,0" Padding="0,0,10,0"
                                   VerticalScrollBarVisibility="Auto" Focusable="False">
-                        <!-- WPF's stock scrollbar is a light-grey slab; on a sheet this dark
-                             it is the only thing that looks unfinished. -->
-                        <ScrollViewer.Resources>
-                            <Style TargetType="ScrollBar">
-                                <Setter Property="Width" Value="8" />
-                                <Setter Property="Background" Value="Transparent" />
-                                <Setter Property="Template">
-                                    <Setter.Value>
-                                        <ControlTemplate TargetType="ScrollBar">
-                                            <Track x:Name="PART_Track" IsDirectionReversed="True"
-                                                   Focusable="False">
-                                                <Track.Thumb>
-                                                    <Thumb Focusable="False">
-                                                        <Thumb.Template>
-                                                            <ControlTemplate TargetType="Thumb">
-                                                                <Border CornerRadius="4" Background="#3A4453" />
-                                                            </ControlTemplate>
-                                                        </Thumb.Template>
-                                                    </Thumb>
-                                                </Track.Thumb>
-                                                <Track.IncreaseRepeatButton>
-                                                    <RepeatButton Command="ScrollBar.PageDownCommand"
-                                                                  Opacity="0" Focusable="False"
-                                                                  IsTabStop="False" />
-                                                </Track.IncreaseRepeatButton>
-                                                <Track.DecreaseRepeatButton>
-                                                    <RepeatButton Command="ScrollBar.PageUpCommand"
-                                                                  Opacity="0" Focusable="False"
-                                                                  IsTabStop="False" />
-                                                </Track.DecreaseRepeatButton>
-                                            </Track>
-                                        </ControlTemplate>
-                                    </Setter.Value>
-                                </Setter>
-                            </Style>
-                        </ScrollViewer.Resources>
-
                         <StackPanel>
 
                             <!-- The loop -->
@@ -480,7 +446,7 @@
                                         </StackPanel>
                                         <TextBlock Text="Crop and zoom" Style="{StaticResource CardTitle}" />
                                         <TextBlock Style="{StaticResource CardBody}"
-                                                   Text="Draw a box over the part worth seeing. For the length of the marked range it zooms to fill the frame, then reverts. Locked to the output ratio, so it never letterboxes." />
+                                                   Text="Draw a box over the part worth seeing. For the length of the marked range it zooms to fill the frame, then reverts. With nothing marked it crops the whole video. Locked to the output ratio, so it never letterboxes." />
                                     </StackPanel>
                                 </Border>
 
@@ -506,7 +472,7 @@
                             <Border Style="{StaticResource Card}" Padding="18">
                                 <StackPanel>
                                     <TextBlock Style="{StaticResource CardBody}" Margin="0,0,0,14"
-                                               Text="Both operations drop you into the same placement box, and both are aspect-locked — a crop to the output ratio, an overlay to its own source's — so resizing is one pair of keys instead of four. Drag the box, or drag anywhere outside it to draw a new one." />
+                                               Text="Both operations drop you into the same placement box, and both are aspect-locked — a crop to the output ratio, an overlay to its own source's — so resizing is one pair of keys instead of four. Drag the box to move it, drag a corner handle to resize it, or drag anywhere outside it to draw a new one." />
                                     <UniformGrid Columns="3">
                                         <StackPanel Orientation="Horizontal" Margin="0,0,10,8">
                                             <ContentControl Style="{StaticResource KeyCap}" Content="← ↑ → ↓" />
@@ -547,53 +513,84 @@
                             <!-- Toolbar -->
                             <TextBlock Text="THE TOOLBAR" Style="{StaticResource SectionHead}" />
 
-                            <UniformGrid Columns="4">
+                            <UniformGrid Columns="3">
                                 <Border Style="{StaticResource Card}">
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                            <TextBlock Text="+" Foreground="#6DD48B" FontSize="15"
-                                                       FontWeight="Bold" Margin="0,0,8,0" />
+                                            <Path Style="{StaticResource CardIcon}" Data="{StaticResource Icon.MarkIn}"
+                                                  Fill="#4F9CF5" />
+                                            <Path Style="{StaticResource CardIcon}" Data="{StaticResource Icon.RippleDelete}"
+                                                  Fill="#F27B7B" />
+                                            <Path Style="{StaticResource CardIcon}" Data="{StaticResource Icon.Crop}"
+                                                  Fill="#F2A14C" />
+                                            <Path Style="{StaticResource CardIcon}" Data="{StaticResource Icon.Overlay}"
+                                                  Fill="#6DD48B" />
+                                        </StackPanel>
+                                        <TextBlock Text="The editing icons" Style="{StaticResource CardTitle}" />
+                                        <TextBlock Style="{StaticResource CardBody}"
+                                                   Text="Mark in and out, cut, split, crop, overlay, undo, redo — the keys above, as buttons. Hover one and it tells you its key, whatever you have since changed that key to." />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                            <Path Style="{StaticResource CardIcon}" Data="{StaticResource Icon.Add}"
+                                                  Margin="0,0,8,0" />
                                             <TextBlock Text="Add video" Style="{StaticResource CardTitle}"
-                                                       Margin="0" />
+                                                       Margin="0" VerticalAlignment="Center" />
                                         </StackPanel>
                                         <TextBlock Style="{StaticResource CardBody}"
-                                                   Text="Joins another file onto the end of the timeline as a new segment, scaled to the project's frame. Ctrl+A does the same." />
+                                                   Text="The one button here with its name written on it, first in the row. Joins a file onto the end of the timeline as a new segment, scaled to the project's frame. Ctrl+A does the same." />
                                     </StackPanel>
                                 </Border>
 
                                 <Border Style="{StaticResource Card}">
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                            <TextBlock Text="&#x2193;" Foreground="#4F9CF5" FontSize="15"
-                                                       FontWeight="Bold" Margin="0,0,8,0" />
-                                            <TextBlock Text="Export" Style="{StaticResource CardTitle}"
-                                                       Margin="0" />
+                                            <Path Style="{StaticResource CardIcon}" Data="{StaticResource Icon.Save}"
+                                                  Margin="0,0,8,0" />
+                                            <TextBlock Text="Save as" Style="{StaticResource CardTitle}"
+                                                       Margin="0" VerticalAlignment="Center" />
                                         </StackPanel>
                                         <TextBlock Style="{StaticResource CardBody}"
-                                                   Text="Writes the edited video out, picking the fast path automatically. Ctrl+E does the same." />
+                                                   Text="Writes the edited video out to a file you name, picking the fast path automatically. Your original is never written to. Ctrl+E does the same." />
                                     </StackPanel>
                                 </Border>
 
                                 <Border Style="{StaticResource Card}">
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                            <TextBlock Text="&#x21BA;" Foreground="#FF7A7A" FontSize="14"
-                                                       Margin="0,0,8,0" />
+                                            <Path Style="{StaticResource CardIcon}" Data="{StaticResource Icon.Reset}"
+                                                  Fill="#FF8B8B" Margin="0,0,8,0" />
                                             <TextBlock Text="Reset everything" Style="{StaticResource CardTitle}"
-                                                       Margin="0" />
+                                                       Margin="0" VerticalAlignment="Center" />
                                         </StackPanel>
                                         <TextBlock Style="{StaticResource CardBody}"
-                                                   Text="Drops every cut, crop, overlay and added clip, back to the video as you opened it. It asks first, and Ctrl+Z still brings it all back." />
+                                                   Text="Drops every cut, crop, overlay and added clip, back to the video as you opened it. It asks first, and Ctrl+Z still brings it all back. The only action with no key of its own." />
                                     </StackPanel>
                                 </Border>
 
                                 <Border Style="{StaticResource Card}">
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                            <TextBlock Text="?" Foreground="#4F9CF5" FontSize="15"
-                                                       FontWeight="Bold" Margin="0,0,8,0" />
+                                            <Path Style="{StaticResource CardIcon}" Data="{StaticResource Icon.Settings}"
+                                                  Margin="0,0,8,0" />
+                                            <TextBlock Text="Settings" Style="{StaticResource CardTitle}"
+                                                       Margin="0" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                        <TextBlock Style="{StaticResource CardBody}"
+                                                   Text="Controls: every key in this sheet, and every key that places a box, on a page where you can move it somewhere that suits your hands. Ctrl+, opens it." />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                            <Path Style="{StaticResource CardIcon}" Data="{StaticResource Icon.Help}"
+                                                  Margin="0,0,8,0" />
                                             <TextBlock Text="How it works" Style="{StaticResource CardTitle}"
-                                                       Margin="0" />
+                                                       Margin="0" VerticalAlignment="Center" />
                                         </StackPanel>
                                         <TextBlock Style="{StaticResource CardBody}"
                                                    Text="This sheet. F1 opens and closes it too, from anywhere — including mid-crop." />
@@ -616,9 +613,9 @@
                                                     Content="Ctrl + E"
                                                     VerticalAlignment="Top" Margin="0,2,16,0" />
                                     <StackPanel Grid.Column="1">
-                                        <TextBlock Text="Export" Style="{StaticResource CardTitle}" />
+                                        <TextBlock Text="Save as" Style="{StaticResource CardTitle}" />
                                         <TextBlock Style="{StaticResource CardBody}"
-                                                   Text="If you only cut, the video is copied rather than re-encoded and export runs at roughly file-copy speed. Add a crop or an overlay and only the kept frames are re-encoded. There is no Save: edits autosave against the video's content and come back — undo history included — the next time you open it." />
+                                                   Text="If you only cut, the video is copied rather than re-encoded and it runs at roughly file-copy speed. Add a crop or an overlay and only the kept frames are re-encoded. It always writes a new file — the video you opened is never modified. There is no Save button for the edits themselves: those autosave against the video's content and come back the next time you open it." />
                                     </StackPanel>
                                 </Grid>
                             </Border>
@@ -681,6 +678,22 @@
                     </Border>
                 </Grid>
             </Border>
+        </Border>
+
+        <!-- The settings screen, over the editor rather than in a window of its own: it is
+             a place you go for a moment and come back from, and a second window would put
+             the thing you are configuring behind it. -->
+        <Border x:Name="SettingsOverlay"
+                Grid.RowSpan="5"
+                Background="#F00A0C10"
+                Visibility="Collapsed"
+                MouseLeftButtonDown="OnSettingsBackdropClick">
+
+            <local:SettingsView x:Name="Settings" MaxWidth="1000" MaxHeight="740" Margin="28">
+                <local:SettingsView.RenderTransform>
+                    <TranslateTransform />
+                </local:SettingsView.RenderTransform>
+            </local:SettingsView>
         </Border>
     </Grid>
 </Window>

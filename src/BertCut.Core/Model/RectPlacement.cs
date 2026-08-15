@@ -168,6 +168,31 @@ public static class RectPlacement
         return Clamp(new RectI(centreX - (w / 2), centreY - (h / 2), w, h), frameWidth, frameHeight);
     }
 
+    /// <summary>
+    /// Resizes from a dragged corner, keeping the opposite corner where it is.
+    /// </summary>
+    /// <remarks>
+    /// The counterpart to <see cref="FromDrag"/> for a grab on one of the four handles.
+    /// Centring the result the way a freehand drag does would drag the anchored corner
+    /// along with the pointer, which is the one thing a corner handle must not do; the
+    /// ratio is still not negotiable, so the pointer sets the size and the anchor sets the
+    /// position.
+    /// </remarks>
+    public static RectI FromCorner(int anchorX, int anchorY, int x, int y, int aspectW, int aspectH, int frameWidth, int frameHeight)
+    {
+        var width = Math.Abs(x - anchorX);
+        var height = Math.Abs(y - anchorY);
+
+        // Whichever dimension demands the larger rectangle wins, so the box keeps up with
+        // the pointer on both axes.
+        var byHeight = aspectH > 0 ? (int)Math.Round((double)height * aspectW / aspectH) : width;
+        var (w, h) = FitAspect(Math.Max(width, byHeight), aspectW, aspectH, frameWidth, frameHeight);
+
+        return Clamp(
+            new RectI(x >= anchorX ? anchorX : anchorX - w, y >= anchorY ? anchorY : anchorY - h, w, h),
+            frameWidth, frameHeight);
+    }
+
     /// <summary>Shifts a rectangle back inside the frame, shrinking it only if it cannot fit.</summary>
     public static RectI Clamp(RectI rect, int frameWidth, int frameHeight)
     {

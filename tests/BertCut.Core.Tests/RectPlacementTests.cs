@@ -176,6 +176,46 @@ public class RectPlacementTests
     }
 
     [Fact]
+    public void Dragging_a_corner_keeps_the_opposite_one_where_it_was()
+    {
+        // The whole point of a corner handle: the corner you are not holding stays put.
+        var rect = new RectI(200, 120, 640, 384);
+
+        var resized = RectPlacement.FromCorner(
+            rect.Right, rect.Bottom, 400, 240, FrameW, FrameH, FrameW, FrameH);
+
+        Assert.Equal(rect.Right, resized.Right);
+        Assert.Equal(rect.Bottom, resized.Bottom);
+        AssertMatchesOutputAspect(resized);
+        AssertInsideFrame(resized);
+    }
+
+    [Fact]
+    public void Dragging_a_corner_past_its_anchor_flips_the_rectangle_rather_than_inverting_it()
+    {
+        var resized = RectPlacement.FromCorner(
+            640, 384, 200, 100, FrameW, FrameH, FrameW, FrameH);
+
+        Assert.True(resized.W > 0 && resized.H > 0);
+        Assert.Equal(640, resized.Right);
+        Assert.Equal(384, resized.Bottom);
+        AssertMatchesOutputAspect(resized);
+    }
+
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(1279, 767)]
+    [InlineData(2000, 2000)]
+    [InlineData(-500, -500)]
+    public void A_corner_drag_stays_inside_the_frame_and_keeps_the_ratio(int x, int y)
+    {
+        var resized = RectPlacement.FromCorner(400, 240, x, y, FrameW, FrameH, FrameW, FrameH);
+
+        AssertInsideFrame(resized);
+        AssertMatchesOutputAspect(resized);
+    }
+
+    [Fact]
     public void Dimensions_are_always_even_for_chroma_subsampling()
     {
         // ffmpeg's crop filter fails outright on an odd dimension with yuv420p.

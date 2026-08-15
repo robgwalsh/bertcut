@@ -32,11 +32,37 @@ public sealed class RectEditor : FrameworkElement
     /// <summary>Corner handle size, in screen pixels.</summary>
     private const double HandleSize = 10;
 
+    /// <summary>
+    /// How far the pointer must travel before a press outside the box starts drawing a new
+    /// one, in screen pixels.
+    /// </summary>
+    /// <remarks>
+    /// Without it, the press alone collapses the rectangle to the minimum size at the
+    /// cursor — so a stray click, or a click meant to give the preview focus, destroys the
+    /// placement the user had already made.
+    /// </remarks>
+    private const double DragThreshold = 4;
+
+    /// <summary>What the pointer is doing between press and release.</summary>
+    private enum DragKind
+    {
+        None,
+
+        /// <summary>Moving the whole rectangle.</summary>
+        Move,
+
+        /// <summary>Resizing from a corner handle, with the opposite corner pinned.</summary>
+        Resize,
+
+        /// <summary>Drawing a replacement rectangle, once the pointer has actually moved.</summary>
+        DrawNew,
+    }
+
     private EditorViewModel? _model;
-    private bool _dragging;
-    private bool _drawingNew;
+    private DragKind _drag;
     private Point _dragOrigin;
     private RectI _dragStartRect;
+    private (int X, int Y) _resizeAnchor;
 
     public RectEditor()
     {
@@ -69,6 +95,14 @@ public sealed class RectEditor : FrameworkElement
     private void Sync()
     {
         var placing = _model?.IsPlacing == true;
+
+        // Esc can end a placement mid-drag, which would otherwise leave the capture and
+        // the drag state behind for the next one to inherit.
+        if (!placing && _drag != DragKind.None)
+        {
+            _drag = DragKind.None;
+            ReleaseMouseCapture();
+        }
 
         Visibility = placing ? Visibility.Visible : Visibility.Collapsed;
         IsHitTestVisible = placing;
@@ -130,6 +164,12 @@ public sealed class RectEditor : FrameworkElement
         var bounds = VideoBounds();
         var rect = ToScreen(_model.PendingRect);
 
+        // WPF hit-tests painted geometry, not element bounds, so this transparent fill is
+        // what makes the surface clickable at all. Without it the inside of the box — the
+        // part you grab to move it — is a hole the press falls straight through to the
+        // video underneath, and dragging the box does nothing whatsoever.
+        dc.DrawRectangle(Brushes.Transparent, null, new Rect(0, 0, ActualWidth, ActualHeight));
+
         // Shade everything outside the rectangle so the selection reads at a glance.
         var outside = new CombinedGeometry(
             GeometryCombineMode.Exclude,
@@ -158,6 +198,28 @@ public sealed class RectEditor : FrameworkElement
         new(r.X, r.Y), new(r.Right, r.Y), new(r.X, r.Bottom), new(r.Right, r.Bottom),
     ];
 
+    /// <summary>Which corner handle the pointer is over, or null.</summary>
+    private static int? CornerAt(Rect rect, Point point)
+    {
+        var corners = Corners(rect);
+
+        for (var i = 0; i < corners.Length; i++)
+            if (Math.Abs(point.X - corners[i].X) <= HandleSize
+                && Math.Abs(point.Y - corners[i].Y) <= HandleSize)
+                return i;
+
+        return null;
+    }
+
+    /// <summary>The corner that stays put while <paramref name="corner"/> is dragged.</summary>
+    private static (int X, int Y) OppositeCorner(RectI rect, int corner) => corner switch
+    {
+        0 => (rect.Right, rect.Bottom),
+        1 => (rect.X, rect.Bottom),
+        2 => (rect.Right, rect.Y),
+        _ => (rect.X, rect.Y),
+    };
+
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
     {
         if (_model is null || !_model.IsPlacing) return;
@@ -174,18 +236,20 @@ public sealed class RectEditor : FrameworkElement
         var rect = ToScreen(_model.PendingRect);
 
         CaptureMouse();
-        _dragging = true;
         _dragOrigin = point;
         _dragStartRect = _model.PendingRect;
 
-        // Inside the box moves it; anywhere else starts drawing a new one, so a user who
-        // wants a completely different region does not have to drag the old one there.
-        _drawingNew = !rect.Contains(point);
-
-        if (_drawingNew)
+        // A corner handle resizes; inside the box moves it; anywhere else draws a new one,
+        // so a user who wants a completely different region does not have to drag the old
+        // one there. Drawing waits for the pointer to move — see DragThreshold.
+        if (CornerAt(rect, point) is { } corner)
         {
-            var (x, y) = ToOutput(point);
-            _model.DragPendingRect(x, y, x, y);
+            _drag = DragKind.Resize;
+            _resizeAnchor = OppositeCorner(_dragStartRect, corner);
+        }
+        else
+        {
+            _drag = rect.Contains(point) ? DragKind.Move : DragKind.DrawNew;
         }
 
         e.Handled = true;
@@ -193,38 +257,74 @@ public sealed class RectEditor : FrameworkElement
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
-        if (!_dragging || _model is null) return;
+        if (_model is null || !_model.IsPlacing) return;
 
         var point = e.GetPosition(this);
 
-        if (_drawingNew)
+        if (_drag == DragKind.None)
         {
-            var (x0, y0) = ToOutput(_dragOrigin);
-            var (x1, y1) = ToOutput(point);
-            _model.DragPendingRect(x0, y0, x1, y1);
+            Cursor = CursorFor(point);
+            return;
         }
-        else
+
+        switch (_drag)
         {
-            var bounds = VideoBounds();
-            var output = _model.Project.Output;
+            case DragKind.Resize:
+                var (x, y) = ToOutput(point);
+                _model.ResizePendingRect(_resizeAnchor.X, _resizeAnchor.Y, x, y);
+                break;
 
-            var dx = (int)Math.Round((point.X - _dragOrigin.X) / Math.Max(1, bounds.Width) * output.Width);
-            var dy = (int)Math.Round((point.Y - _dragOrigin.Y) / Math.Max(1, bounds.Height) * output.Height);
+            case DragKind.Move:
+                var bounds = VideoBounds();
+                var output = _model.Project.Output;
 
-            _model.SetPendingRect(_dragStartRect with { X = _dragStartRect.X + dx, Y = _dragStartRect.Y + dy });
+                var dx = (int)Math.Round((point.X - _dragOrigin.X) / Math.Max(1, bounds.Width) * output.Width);
+                var dy = (int)Math.Round((point.Y - _dragOrigin.Y) / Math.Max(1, bounds.Height) * output.Height);
+
+                _model.SetPendingRect(_dragStartRect with { X = _dragStartRect.X + dx, Y = _dragStartRect.Y + dy });
+                break;
+
+            case DragKind.DrawNew:
+                if (Math.Abs(point.X - _dragOrigin.X) < DragThreshold
+                    && Math.Abs(point.Y - _dragOrigin.Y) < DragThreshold)
+                    return;
+
+                var (x0, y0) = ToOutput(_dragOrigin);
+                var (x1, y1) = ToOutput(point);
+                _model.DragPendingRect(x0, y0, x1, y1);
+                break;
         }
 
         e.Handled = true;
     }
 
+    /// <summary>The shape of the gesture the pointer is currently offering.</summary>
+    private Cursor CursorFor(Point point)
+    {
+        var rect = ToScreen(_model!.PendingRect);
+
+        return CornerAt(rect, point) switch
+        {
+            0 or 3 => Cursors.SizeNWSE,
+            1 or 2 => Cursors.SizeNESW,
+            _ => rect.Contains(point) ? Cursors.SizeAll : Cursors.Cross,
+        };
+    }
+
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
     {
-        if (!_dragging) return;
+        if (_drag == DragKind.None) return;
 
-        _dragging = false;
-        _drawingNew = false;
+        _drag = DragKind.None;
         ReleaseMouseCapture();
         e.Handled = true;
+    }
+
+    /// <summary>Ends a drag that lost the mouse, e.g. to a window that stole capture.</summary>
+    protected override void OnLostMouseCapture(MouseEventArgs e)
+    {
+        _drag = DragKind.None;
+        base.OnLostMouseCapture(e);
     }
 
     private static Brush Frozen(Color color)

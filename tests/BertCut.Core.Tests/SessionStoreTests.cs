@@ -149,10 +149,10 @@ public class KeyMapTests
     [Fact]
     public void Only_shift_is_forgiven_on_the_frame_step_keys()
     {
-        // Dropping every modifier would let Ctrl+, resolve to a frame step and quietly
-        // claim a chord a later feature may want.
+        // Dropping every modifier would let Ctrl+, resolve to a frame step, and Ctrl+, is
+        // the settings chord — the one place the comma key means something else entirely.
         Assert.Equal(
-            EditorIntent.None,
+            EditorIntent.ToggleSettings,
             KeyMap.Resolve(EditorKey.Comma, EditorModifiers.Control, EditorMode.Normal));
     }
 

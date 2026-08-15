@@ -2,12 +2,14 @@ using System.ComponentModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using BertCut.Core.Export;
 using BertCut.Core.Input;
+using BertCut.Core.Session;
 using BertCut.Media;
 using Microsoft.Win32;
 
@@ -19,6 +21,17 @@ public partial class MainWindow : Window
     private readonly EditorViewModel _model;
     private WriteableBitmap? _surface;
 
+    /// <summary>
+    /// The keyboard, as the user has it.
+    /// </summary>
+    /// <remarks>
+    /// Loaded from disk rather than taken from <see cref="KeyMap"/>, and replaced wholesale
+    /// when the Controls page changes something. Everything that prints a key — the
+    /// tooltips, the help sheet, the hint over an empty preview — is rebuilt from this, so
+    /// there is exactly one answer in the app to "what does this key do".
+    /// </remarks>
+    private KeyBindings _keys = KeyBindingStore.Load();
+
     public MainWindow(FfmpegRuntime runtime)
     {
         InitializeComponent();
@@ -27,10 +40,14 @@ public partial class MainWindow : Window
         _model = new EditorViewModel(runtime);
         _model.PropertyChanged += OnModelChanged;
         _model.FrameChanged += Present;
+        _model.SessionRestored += ShowRestoreToast;
 
         Timeline.Bind(_model);
         Placement.Bind(_model);
-        BuildHelp();
+
+        Settings.BindingsChanged += OnBindingsChanged;
+        Settings.CloseRequested += HideSettings;
+        ApplyBindings();
 
         // Playback advances on the composition tick so frames land in step with WPF's
         // own rendering rather than racing it from a timer.
@@ -52,6 +69,15 @@ public partial class MainWindow : Window
     {
         base.OnPreviewKeyDown(e);
 
+        // The Controls page owns the keyboard while it is open. It is the one screen where
+        // a keystroke is being chosen rather than obeyed, and an editor that also acted on
+        // it would ripple a cut away while you were binding the key that does it.
+        if (SettingsOverlay.Visibility == Visibility.Visible)
+        {
+            e.Handled = Settings.HandleKey(e);
+            return;
+        }
+
         if (HelpOverlay.Visibility == Visibility.Visible
             && e.Key is Key.Escape or Key.F1)
         {
@@ -60,10 +86,10 @@ public partial class MainWindow : Window
             return;
         }
 
-        var key = Translate(e.Key);
+        var key = WpfKeys.Translate(e);
         if (key == EditorKey.None) return;
 
-        var intent = KeyMap.Resolve(key, CurrentModifiers(), _model.Mode);
+        var intent = _keys.Resolve(key, WpfKeys.Modifiers(), _model.Mode);
         if (intent == EditorIntent.None) return;
 
         e.Handled = true;
@@ -80,6 +106,19 @@ public partial class MainWindow : Window
             return;
         }
 
+        Invoke(intent);
+    }
+
+    /// <summary>
+    /// Carries out an intent, whether a key or a toolbar button asked for it.
+    /// </summary>
+    /// <remarks>
+    /// The single place the two halves of the app meet. A button that called the view model
+    /// directly would be a second implementation of the same action, free to drift from the
+    /// key that is supposed to be its equal.
+    /// </remarks>
+    private void Invoke(EditorIntent intent)
+    {
         switch (intent)
         {
             case EditorIntent.OpenFile: OpenFile(); break;
@@ -87,6 +126,7 @@ public partial class MainWindow : Window
             case EditorIntent.AppendSource: AppendFile(); break;
             case EditorIntent.Export: _ = ExportAsync(); break;
             case EditorIntent.ToggleHelp: ToggleHelp(); break;
+            case EditorIntent.ToggleSettings: ToggleSettings(); break;
             default: _model.Dispatch(intent); break;
         }
     }
@@ -96,7 +136,7 @@ public partial class MainWindow : Window
     {
         base.OnPreviewKeyUp(e);
 
-        if (Translate(e.Key) is not (EditorKey.Comma or EditorKey.Period)) return;
+        if (WpfKeys.Translate(e) is not (EditorKey.Comma or EditorKey.Period)) return;
         if (_model.Mode != EditorMode.Normal) return;
 
         // Harmless after a tap, which left the transport stopped anyway.
@@ -104,59 +144,22 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
-    private static EditorModifiers CurrentModifiers()
+    /// <summary>
+    /// Any click anywhere puts the restore notice away.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not handled: this is a dismissal riding along on whatever the click was
+    /// actually for. Clicking the notice away and starting a crop drag are the same gesture,
+    /// and asking for two would make the notice a thing to get past.
+    /// </remarks>
+    protected override void OnPreviewMouseDown(MouseButtonEventArgs e)
     {
-        var modifiers = EditorModifiers.None;
-        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)) modifiers |= EditorModifiers.Shift;
-        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) modifiers |= EditorModifiers.Control;
-        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt)) modifiers |= EditorModifiers.Alt;
-        return modifiers;
+        base.OnPreviewMouseDown(e);
+        HideRestoreToast();
     }
 
-    /// <summary>Maps WPF keys onto Core's framework-independent key enum.</summary>
-    private static EditorKey Translate(Key key) => key switch
-    {
-        Key.Space => EditorKey.Space,
-        Key.Left => EditorKey.Left,
-        Key.Right => EditorKey.Right,
-        Key.Up => EditorKey.Up,
-        Key.Down => EditorKey.Down,
-        Key.Home => EditorKey.Home,
-        Key.End => EditorKey.End,
-        Key.Enter => EditorKey.Enter,
-        Key.Escape => EditorKey.Escape,
-        Key.Delete => EditorKey.Delete,
-        Key.A => EditorKey.A,
-        Key.C => EditorKey.C,
-        Key.E => EditorKey.E,
-        Key.I => EditorKey.I,
-        Key.J => EditorKey.J,
-        Key.K => EditorKey.K,
-        Key.L => EditorKey.L,
-        Key.M => EditorKey.M,
-        Key.O => EditorKey.O,
-        Key.P => EditorKey.P,
-        Key.S => EditorKey.S,
-        Key.V => EditorKey.V,
-        Key.X => EditorKey.X,
-        Key.Y => EditorKey.Y,
-        Key.Z => EditorKey.Z,
-        Key.D1 or Key.NumPad1 => EditorKey.D1,
-        Key.D2 or Key.NumPad2 => EditorKey.D2,
-        Key.D3 or Key.NumPad3 => EditorKey.D3,
-        Key.D4 or Key.NumPad4 => EditorKey.D4,
-        Key.D5 or Key.NumPad5 => EditorKey.D5,
-        Key.OemMinus or Key.Subtract => EditorKey.Minus,
-        Key.OemPlus or Key.Add => EditorKey.Equals,
-        Key.OemBackslash or Key.Oem5 => EditorKey.Backslash,
-        Key.OemComma => EditorKey.Comma,
-        Key.OemPeriod => EditorKey.Period,
-        Key.F1 => EditorKey.F1,
-        _ => EditorKey.None,
-    };
-
     /// <summary>Opens a file directly, e.g. one passed on the command line.</summary>
-    public void OpenPath(string path) => _ = _model.OpenAsync(path);
+    public void OpenPath(string path) => Open(path);
 
     private void OpenFile()
     {
@@ -166,7 +169,21 @@ public partial class MainWindow : Window
             Filter = "Video files|*.mp4;*.mkv;*.mov;*.avi;*.webm;*.m4v|All files|*.*",
         };
 
-        if (dialog.ShowDialog(this) == true) _ = _model.OpenAsync(dialog.FileName);
+        if (dialog.ShowDialog(this) == true) Open(dialog.FileName);
+    }
+
+    /// <summary>
+    /// Opens a video, clearing any notice left over from the last one.
+    /// </summary>
+    /// <remarks>
+    /// The open itself does not raise the notice again unless there is something to restore,
+    /// so a stale one would otherwise sit there claiming edits that belong to a video no
+    /// longer on screen.
+    /// </remarks>
+    private void Open(string path)
+    {
+        HideRestoreToast();
+        _ = _model.OpenAsync(path);
     }
 
     private void ImportFile()
@@ -180,22 +197,36 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog(this) == true) _ = _model.ImportAsync(dialog.FileName);
     }
 
+    /// <summary>
+    /// Adds a video: the first one, or another onto the end of the timeline.
+    /// </summary>
+    /// <remarks>
+    /// This is the toolbar's front door — the one button that says what it is — so on an
+    /// empty editor it has to read as "open a video" rather than as an appending operation
+    /// against a timeline that does not exist yet. <c>AppendAsync</c> already falls through
+    /// to an open in that case; the title is what tells the user so before they commit.
+    /// </remarks>
     private void AppendFile()
     {
         var dialog = new OpenFileDialog
         {
-            Title = "Add a video to the end of the timeline",
+            Title = _model.HasMedia ? "Add a video to the end of the timeline" : "Open a video",
             Filter = "Video files|*.mp4;*.mkv;*.mov;*.avi;*.webm;*.m4v|All files|*.*",
         };
 
-        if (dialog.ShowDialog(this) == true) _ = _model.AppendAsync(dialog.FileName);
+        if (dialog.ShowDialog(this) != true) return;
+
+        HideRestoreToast();
+        _ = _model.AppendAsync(dialog.FileName);
     }
 
     // ---- toolbar ---------------------------------------------------------------------
 
-    private void OnAddSegmentClick(object sender, RoutedEventArgs e) => AppendFile();
-
-    private void OnExportClick(object sender, RoutedEventArgs e) => _ = ExportAsync();
+    /// <summary>Every icon button but the reset, which has no intent by design.</summary>
+    private void OnActionClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: EditorIntent intent }) Invoke(intent);
+    }
 
     /// <summary>
     /// Confirms, then throws every edit away.
@@ -230,8 +261,6 @@ public partial class MainWindow : Window
         Keyboard.Focus(this);
     }
 
-    private void OnHelpClick(object sender, RoutedEventArgs e) => ToggleHelp();
-
     private void OnHelpCloseClick(object sender, RoutedEventArgs e) => HideHelp();
 
     /// <summary>Closes the sheet when the dimmed area around it is clicked, not the sheet itself.</summary>
@@ -248,6 +277,7 @@ public partial class MainWindow : Window
 
     private void ShowHelp()
     {
+        HideSettings();
         HelpOverlay.Visibility = Visibility.Visible;
 
         // The sheet lifts in rather than appearing. It costs a quarter of a second and it
@@ -261,6 +291,177 @@ public partial class MainWindow : Window
         Keyboard.Focus(this);
     }
 
+    // ---- the restore notice ------------------------------------------------------------
+
+    /// <summary>
+    /// Which showing of the notice is current.
+    /// </summary>
+    /// <remarks>
+    /// The fade-out collapses the notice when it finishes, and a second video can be opened
+    /// inside that fifth of a second. Without this the old fade's completion would collapse
+    /// the new notice the moment it appeared.
+    /// </remarks>
+    private int _toastGeneration;
+
+    /// <summary>Says out loud that this video came back with the edits made to it last time.</summary>
+    private void ShowRestoreToast(string fileName)
+    {
+        RestoreToastTitle.Text = $"Restored your previous edits to {fileName}";
+
+        // The undo key can have been moved, or taken off the keyboard entirely, in which
+        // case the notice offers the only other way out of it rather than naming a key that
+        // does nothing.
+        var undo = Gesture(EditorIntent.Undo);
+
+        RestoreToastKey.Content = undo;
+        RestoreToastKey.Visibility = undo.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        RestoreToastHint.Margin = new Thickness(undo.Length == 0 ? 0 : 9, 0, 0, 0);
+        RestoreToastHint.Text = undo.Length == 0
+            ? "Click anywhere to dismiss — or use Reset to start over."
+            : "discards them · click anywhere to dismiss";
+
+        _toastGeneration++;
+        RestoreToast.Visibility = Visibility.Visible;
+
+        RestoreToast.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, Ms(170)));
+
+        // Rises as it fades in, the same way the help sheet and the Controls page do. A
+        // panel that simply exists reads as something that was always there and missed.
+        Lift(RestoreToast).BeginAnimation(
+            TranslateTransform.YProperty,
+            new DoubleAnimation(14, 0, Ms(260)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+    }
+
+    /// <summary>Fades the notice out, if one is up. Safe to call when none is.</summary>
+    private void HideRestoreToast()
+    {
+        if (RestoreToast.Visibility != Visibility.Visible) return;
+
+        var generation = ++_toastGeneration;
+
+        var fade = new DoubleAnimation(0, Ms(140));
+        fade.Completed += (_, _) =>
+        {
+            if (_toastGeneration == generation) RestoreToast.Visibility = Visibility.Collapsed;
+        };
+
+        RestoreToast.BeginAnimation(OpacityProperty, fade);
+    }
+
+    private static Duration Ms(int milliseconds) => new(TimeSpan.FromMilliseconds(milliseconds));
+
+    private static TranslateTransform Lift(UIElement element) => (TranslateTransform)element.RenderTransform;
+
+    // ---- settings --------------------------------------------------------------------
+
+    private void ToggleSettings()
+    {
+        if (SettingsOverlay.Visibility == Visibility.Visible) HideSettings();
+        else ShowSettings();
+    }
+
+    private void ShowSettings()
+    {
+        HelpOverlay.Visibility = Visibility.Collapsed;
+
+        Settings.Open(_keys);
+        SettingsOverlay.Visibility = Visibility.Visible;
+
+        if (TryFindResource("SettingsIn") is Storyboard entrance) entrance.Begin(this);
+    }
+
+    private void HideSettings()
+    {
+        if (SettingsOverlay.Visibility != Visibility.Visible) return;
+
+        SettingsOverlay.Visibility = Visibility.Collapsed;
+
+        // Focus went nowhere while the screen was up — nothing on it is focusable either —
+        // but a rebind that ended on Escape leaves the page armed, and it must not still be
+        // armed the next time it opens.
+        Settings.Close();
+        Keyboard.Focus(this);
+    }
+
+    /// <summary>Closes the screen when the dimmed area around it is clicked, not the screen itself.</summary>
+    private void OnSettingsBackdropClick(object sender, MouseButtonEventArgs e)
+    {
+        if (ReferenceEquals(e.OriginalSource, SettingsOverlay)) HideSettings();
+    }
+
+    /// <summary>
+    /// Takes the Controls page's changes, everywhere they show.
+    /// </summary>
+    /// <remarks>
+    /// Saved on the spot rather than behind an OK button, like every other change this app
+    /// makes. A failed write is worth saying out loud — the next session would silently go
+    /// back to the shipped keys — but it must not stop the keys working now.
+    /// </remarks>
+    private void OnBindingsChanged(KeyBindings bindings)
+    {
+        _keys = bindings;
+        ApplyBindings();
+
+        try
+        {
+            KeyBindingStore.Save(bindings);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            StatusLabel.Text = "Could not save your controls — they will work until you close BertCut.";
+        }
+    }
+
+    /// <summary>Rebuilds everything in the shell that prints a key.</summary>
+    private void ApplyBindings()
+    {
+        BuildHelp();
+        BuildToolTips();
+
+        EmptyHint.Text =
+            $"{Gesture(EditorIntent.OpenFile)} to open a video\n\n"
+            + $"{Gesture(EditorIntent.MarkIn)} / {Gesture(EditorIntent.MarkOut)} mark in and out · "
+            + $"{Gesture(EditorIntent.RippleDelete)} ripples the marked range away\n"
+            + $"{Gesture(EditorIntent.BeginCrop)} crops the marked range · "
+            + $"{Gesture(EditorIntent.BeginOverlay)} overlays a clip on it\n"
+            + $"{Gesture(EditorIntent.PlayPause)} plays · "
+            + $"{Gesture(EditorIntent.StepBack)} {Gesture(EditorIntent.StepForward)} step a frame · "
+            + $"{Gesture(EditorIntent.Undo)} undoes\n"
+            + $"{Gesture(EditorIntent.ToggleHelp)} for all shortcuts";
+
+        HintLabel.Text = $"{Gesture(EditorIntent.ToggleHelp)} shortcuts";
+    }
+
+    private string Gesture(EditorIntent intent) => _keys.GestureFor(intent);
+
+    /// <summary>
+    /// Gives every toolbar button a tooltip naming it and the key that does the same thing.
+    /// </summary>
+    /// <remarks>
+    /// Built from the button's own automation name, so the thing a screen reader announces
+    /// and the thing the tooltip says are one string rather than two that agree today.
+    /// </remarks>
+    private void BuildToolTips()
+    {
+        foreach (var button in Buttons(Toolbar))
+            button.ToolTip = new ShortcutTip(
+                AutomationProperties.GetName(button),
+                button.Tag is EditorIntent intent ? Gesture(intent) : "",
+                AutomationProperties.GetHelpText(button));
+    }
+
+    private static IEnumerable<Button> Buttons(DependencyObject root)
+    {
+        foreach (var child in LogicalTreeHelper.GetChildren(root))
+        {
+            if (child is Button button) yield return button;
+
+            if (child is DependencyObject node)
+                foreach (var nested in Buttons(node))
+                    yield return nested;
+        }
+    }
+
     private async Task ExportAsync()
     {
         if (!_model.HasMedia)
@@ -272,7 +473,7 @@ public partial class MainWindow : Window
         var first = _model.Project.Sources[0];
         var dialog = new SaveFileDialog
         {
-            Title = "Export",
+            Title = "Save as",
             Filter = "MP4 video|*.mp4",
             FileName = Path.GetFileNameWithoutExtension(first.Path) + "-edit.mp4",
             InitialDirectory = Path.GetDirectoryName(first.Path),
@@ -390,41 +591,19 @@ public partial class MainWindow : Window
         return brush;
     }
 
+    /// <summary>
+    /// Fills the shortcut reference from the key map the dispatcher answers to.
+    /// </summary>
+    /// <remarks>
+    /// Generated rather than written out, which is what stops the sheet drifting from the
+    /// keys — including away from the user's own changes to them.
+    /// </remarks>
     private void BuildHelp() =>
-        HelpList.ItemsSource = KeyMap.ForHelp()
-            .Select(group => group.Select(b => new
-            {
-                Gesture = Describe(b),
-                b.Description,
-            }).ToList())
-            .Zip(KeyMap.ForHelp().Select(g => g.Key), (items, key) => new HelpGroup(key, items))
+        HelpList.ItemsSource = _keys.ForHelp()
+            .Select(group => new HelpGroup(
+                group.Key,
+                group.Select(b => new { Gesture = GestureText.Format(b), b.Description })))
             .ToList();
-
-    private static string Describe(Core.Input.KeyBinding binding)
-    {
-        var parts = new List<string>();
-        if (binding.Modifiers.HasFlag(EditorModifiers.Control)) parts.Add("Ctrl");
-        if (binding.Modifiers.HasFlag(EditorModifiers.Shift)) parts.Add("Shift");
-        if (binding.Modifiers.HasFlag(EditorModifiers.Alt)) parts.Add("Alt");
-
-        parts.Add(binding.Key switch
-        {
-            EditorKey.Left => "←",
-            EditorKey.Right => "→",
-            EditorKey.Up => "↑",
-            EditorKey.Down => "↓",
-            EditorKey.Equals => "=",
-            EditorKey.Minus => "-",
-            EditorKey.Backslash => "\\",
-
-            // Bound shift-agnostically, so the sheet shows the character people reach for.
-            EditorKey.Comma => "<",
-            EditorKey.Period => ">",
-            var k => k.ToString(),
-        });
-
-        return string.Join(" + ", parts);
-    }
 
     protected override void OnClosing(CancelEventArgs e)
     {

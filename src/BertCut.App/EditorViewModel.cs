@@ -65,6 +65,18 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     /// <summary>Raised when the rendered frame changed and the surface should repaint.</summary>
     public event Action? FrameChanged;
 
+    /// <summary>
+    /// Raised when opening a video brought last session's edits back with it, carrying the
+    /// video's file name.
+    /// </summary>
+    /// <remarks>
+    /// An event rather than a status string because the shell says this twice, in two
+    /// registers: once in the status bar, where it scrolls past, and once over the picture,
+    /// where it has to be dismissed. The view model owns the fact; the window decides how
+    /// loudly to say it.
+    /// </remarks>
+    public event Action<string>? SessionRestored;
+
     public Project Project => _document.Current;
 
     public PreviewEngine? Preview => _preview;
@@ -283,6 +295,8 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
             Status = usable
                 ? $"{Path.GetFileName(path)} — restored your previous edits (Ctrl+Z to discard)"
                 : Describe(probe.Media);
+
+            if (usable) SessionRestored?.Invoke(Path.GetFileName(path));
         }
         catch (Exception e) when (e is InvalidOperationException or IOException or FfmpegDecodeException)
         {
@@ -527,9 +541,21 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
     private void BeginCrop()
     {
-        if (SelectedRange is not { } range)
+        if (!HasMedia)
         {
-            Status = "Mark the range to crop with I and O first.";
+            Status = "Press Ctrl+O to open a video.";
+            return;
+        }
+
+        // With nothing marked, the crop covers the whole video. Reframing an entire
+        // recording is common enough that it should not first require marking it end to
+        // end, and unlike a ripple delete there is nothing destructive about the default.
+        var selection = SelectedRange;
+        var range = selection ?? new FrameRange(0, DurationFrames);
+
+        if (range.IsEmpty)
+        {
+            Status = "Nothing to crop.";
             return;
         }
 
@@ -546,7 +572,9 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
                 fraction: 0.6, Anchor.Centre);
 
         Mode = EditorMode.Crop;
-        Status = "Drag the box or use the arrows · Shift+↑/↓ resize · 1-5 snap · Enter applies · Esc cancels";
+        Status = (selection is null ? "Cropping the whole video · " : "")
+                 + "Drag the box or its corners · arrows move · Shift+↑/↓ resize · "
+                 + "1-5 snap · Enter applies · Esc cancels";
     }
 
     private void BeginOverlay()
@@ -639,6 +667,16 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         var (aspectW, aspectH) = PendingAspect();
         PendingRect = RectPlacement.FromDrag(
             x0, y0, x1, y1, aspectW, aspectH, Project.Output.Width, Project.Output.Height);
+    }
+
+    /// <summary>Resizes the pending rectangle from a dragged corner handle.</summary>
+    public void ResizePendingRect(int anchorX, int anchorY, int x, int y)
+    {
+        if (Mode == EditorMode.Normal) return;
+
+        var (aspectW, aspectH) = PendingAspect();
+        PendingRect = RectPlacement.FromCorner(
+            anchorX, anchorY, x, y, aspectW, aspectH, Project.Output.Width, Project.Output.Height);
     }
 
     private (int Width, int Height) PendingAspect() =>
