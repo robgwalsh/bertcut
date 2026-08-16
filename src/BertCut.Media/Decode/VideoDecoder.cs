@@ -82,6 +82,16 @@ public sealed unsafe class VideoDecoder : IDisposable
 
     public int SourceHeight { get; private set; }
 
+    /// <summary>
+    /// How many times this decoder has seeked.
+    /// </summary>
+    /// <remarks>
+    /// Exposed so the rule in <see cref="SeekIsCheaperThanDecodingOn"/> can be pinned by
+    /// counting seeks rather than by timing them — the cost it exists to avoid is real but
+    /// measuring it directly would be a test that fails on a busy machine.
+    /// </remarks>
+    internal int SeekCount { get; private set; }
+
     private void Open(string path)
     {
         AVFormatContext* format = null;
@@ -144,11 +154,23 @@ public sealed unsafe class VideoDecoder : IDisposable
     /// Decodes the frame at <paramref name="frameIndex"/> into <paramref name="target"/>.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Advancing by one frame continues the current decode, which is the playback case and
-    /// costs one packet. Any other position seeks to the preceding keyframe, flushes, and
-    /// decodes forward discarding frames until the target — there is no shortcut for
-    /// frame accuracy, which is why scrubbing shows filmstrip thumbnails until the drag
-    /// settles.
+    /// costs one packet. There is no shortcut for frame accuracy otherwise: landing exactly
+    /// on any other frame means decoding forward to it and discarding what comes first,
+    /// which is why scrubbing shows filmstrip thumbnails until the drag settles.
+    /// </para>
+    /// <para>
+    /// <b>But there are two places to decode forward from</b>, and this takes the nearer:
+    /// the preceding keyframe, or wherever the decoder already is. Seeking unconditionally
+    /// made a jump of one skipped frame cost half a GOP — on a 1280x768 recording with the
+    /// 250-frame GOP a screen recorder writes, 115 ms against the 1.8 ms of a sequential
+    /// frame. That is what turned a single late frame during playback into permanent
+    /// stutter: the playhead follows wall-clock time, so a frame that arrives late is
+    /// recovered by skipping, and the recovery cost 60x what it was recovering from. The
+    /// skip put the decoder further behind than it started, every time, and it never caught
+    /// up again. Decoding forward instead makes a k-frame skip cost k frames.
+    /// </para>
     /// </remarks>
     public bool TryDecodeFrame(long frameIndex, DecodedFrame target)
     {
@@ -158,8 +180,7 @@ public sealed unsafe class VideoDecoder : IDisposable
 
         if (_position == frameIndex && target.FrameIndex == frameIndex) return true;
 
-        var sequential = _position >= 0 && frameIndex == _position + 1;
-        if (!sequential) SeekToKeyframeBefore(frameIndex);
+        if (SeekIsCheaperThanDecodingOn(frameIndex)) SeekToKeyframeBefore(frameIndex);
 
         var targetPts = _index.PtsOf(frameIndex);
 
@@ -177,6 +198,26 @@ public sealed unsafe class VideoDecoder : IDisposable
         }
     }
 
+    /// <summary>
+    /// Whether reaching <paramref name="frameIndex"/> is fewer frames of decoding from the
+    /// preceding keyframe than from where the decoder already stands.
+    /// </summary>
+    /// <remarks>
+    /// Both routes decode-and-discard to the target, so both cost their distance to it and
+    /// the comparison is exact rather than a heuristic. Backwards and from-nothing have no
+    /// route but the keyframe. Advancing by one is the playback path and is never allowed to
+    /// seek, which costs nothing to state and keeps that case a decision this arithmetic
+    /// cannot get wrong — the target being a keyframe would otherwise make a distance of
+    /// zero look cheaper than the one packet it actually is.
+    /// </remarks>
+    private bool SeekIsCheaperThanDecodingOn(long frameIndex)
+    {
+        if (_position < 0 || frameIndex <= _position) return true;
+
+        var ahead = frameIndex - _position;
+        return ahead > 1 && ahead > _index.DecodeDistanceToExact(frameIndex);
+    }
+
     /// <summary>Positions the decoder so the next decode starts before <paramref name="frameIndex"/>.</summary>
     private void SeekToKeyframeBefore(long frameIndex)
     {
@@ -191,6 +232,7 @@ public sealed unsafe class VideoDecoder : IDisposable
         // seek and the discard loop above walks off the wrong reference.
         ffmpeg.avcodec_flush_buffers(_codec);
         _position = -1;
+        SeekCount++;
     }
 
     /// <summary>Pumps packets until the decoder yields a frame.</summary>

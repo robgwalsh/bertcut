@@ -176,6 +176,67 @@ public class VideoDecoderTests : IDisposable
         Assert.Equal(255, frame.Pixels[lastRow + 3]);   // alpha
     }
 
+    /// <summary>
+    /// The playback recovery path: a frame arrives late, the playhead has moved on, and the
+    /// frame after next is asked for.
+    /// </summary>
+    /// <remarks>
+    /// Seeking to serve that costs half a GOP of decoding — on a real 1280x768 recording
+    /// with a 250-frame GOP, 115 ms against 1.8 ms for a sequential frame. Since the
+    /// playhead follows wall-clock time, skipping is how a late frame is recovered, so a
+    /// recovery 60x dearer than the frame it recovered from left the decoder further behind
+    /// than it started and playback never caught up. Counting seeks rather than timing them,
+    /// because the cost is real but a stopwatch here would fail on a busy machine.
+    /// </remarks>
+    [SkippableFact]
+    public async Task Skipping_a_frame_decodes_on_rather_than_seeking_back()
+    {
+        Skip.If(_runtime is null, "No FFmpeg 8+ build found.");
+
+        var path = MakeCountingSource();
+        var probe = await new MediaProber(_runtime!).ProbeAsync(path);
+
+        using var decoder = new VideoDecoder(path, probe.Index, 320, 240);
+        var frame = new DecodedFrame(320, 240);
+
+        // Mid-GOP — the source has keyframes every 60 frames, so seeking to serve 42 would
+        // decode and discard 42 frames to deliver the two this is actually ahead of.
+        decoder.TryDecodeFrame(40, frame);
+        var seeks = decoder.SeekCount;
+
+        Assert.True(decoder.TryDecodeFrame(42, frame));
+        Assert.Equal(42, frame.FrameIndex);
+        Assert.InRange(RedAt(frame), (2 * 42) - 6, (2 * 42) + 6);
+        Assert.Equal(seeks, decoder.SeekCount);
+    }
+
+    /// <summary>The other half of that rule: far enough ahead, the keyframe is the nearer start.</summary>
+    /// <remarks>
+    /// Without this the decoder would grind forward through the whole file rather than seek,
+    /// which is the same mistake in the opposite direction. Both routes decode and discard
+    /// to the target, so whichever is fewer frames away wins.
+    /// </remarks>
+    [SkippableFact]
+    public async Task Jumping_past_a_keyframe_still_seeks()
+    {
+        Skip.If(_runtime is null, "No FFmpeg 8+ build found.");
+
+        var path = MakeCountingSource();
+        var probe = await new MediaProber(_runtime!).ProbeAsync(path);
+
+        using var decoder = new VideoDecoder(path, probe.Index, 320, 240);
+        var frame = new DecodedFrame(320, 240);
+
+        // From 10 to 110: 100 frames of decoding on, against 50 from the keyframe at 60.
+        decoder.TryDecodeFrame(10, frame);
+        var seeks = decoder.SeekCount;
+
+        Assert.True(decoder.TryDecodeFrame(110, frame));
+        Assert.Equal(110, frame.FrameIndex);
+        Assert.InRange(RedAt(frame), (2 * 110) - 6, (2 * 110) + 6);
+        Assert.Equal(seeks + 1, decoder.SeekCount);
+    }
+
     [SkippableFact]
     public async Task Requesting_a_frame_outside_the_source_fails_cleanly()
     {

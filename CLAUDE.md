@@ -49,6 +49,29 @@ Three things are worth knowing before touching any of it:
 directory, keyed by content key exactly as the filmstrip is. It feeds both the waveform lane
 and the coarse correlation pass.
 
+## Decoding a frame
+
+`VideoDecoder` is addressed by exact frame index, and landing on one means decoding forward
+to it from somewhere, discarding what comes first. There are two somewheres — the preceding
+keyframe, or wherever the decoder already stands — and it takes whichever is fewer frames
+away. Advancing by one never seeks, which is the playback path.
+
+That comparison is the whole of it, but it is worth knowing why it is not just "seek unless
+sequential", which is what it was:
+
+- **The playhead follows wall-clock time, so a late frame is recovered by skipping one.**
+  Seeking to serve the skip cost half a GOP — on a 1280x768 recording with the 250-frame GOP
+  a screen recorder writes, 115 ms against 1.8 ms for a sequential frame. The recovery was
+  60x dearer than what it recovered from, so it left the decoder further behind than it
+  started, and playback never caught up. One 40 ms hiccup took a clip from 30 fps to 13 for
+  as long as it played. The cost scales with resolution times GOP length, which is why only
+  the big files showed it.
+- **Backwards is still a seek**, because there is no route to an earlier frame but the
+  keyframe. Reverse playback costs ~85 ms a frame on that same file. Fixing it means keeping
+  decoded frames, which is a memory budget rather than a rule, and nothing keeps them yet.
+- The two `VideoDecoderTests` around `SeekCount` pin both halves. They count seeks rather
+  than timing them: the cost is real, but a stopwatch in a test fails on a busy machine.
+
 ## The timeline strip
 
 Three lanes, and which one a press lands in decides what it means. `TimelineControl` owns
