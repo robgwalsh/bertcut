@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Derive version from tag
+        id: ver
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # tools/ffmpeg is gitignored and 155 MB, and it is what BertCut decodes and exports with.
+      # Without it the None glob in BertCut.App.csproj matches nothing, the publish succeeds, and
+      # the installer that comes out has no decoder in it - a failure with no error anywhere.
+      #
+      # Restored before the *test* step, not just the publish: the ffmpeg-dependent tests skip
+      # silently when it is absent, so a release would otherwise be cut against a fraction of the
+      # suite. fetch-ffmpeg.ps1 is a no-op on a cache hit, which is what its .version marker is for.
+      #
+      # The key is hand-versioned because BtbN publishes to a floating releases/download/latest/
+      # tag: bump the -v1 suffix to take a newer build of the same n8.1 line.
+      - name: Cache FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: tools/ffmpeg
+          key: ffmpeg-n8.1-win64-lgpl-shared-v1
+
+      - name: Fetch FFmpeg
+        shell: pwsh
+        run: ./tools/fetch-ffmpeg.ps1
+
+      - name: Test
+        run: dotnet test BertCut.slnx -c Release
+
+      # -p:Platform=x64 because this publishes a csproj rather than the solution, and the solution
+      # is where x64 is pinned. The FFmpeg DLLs are 64-bit only.
+      - name: Publish
+        run: >
+          dotnet publish src/BertCut.App/BertCut.App.csproj -c Release
+          -r win-x64 --self-contained true -p:Platform=x64
+          -p:Version=${{ steps.ver.outputs.version }} -o publish
+
+      - name: Pack and upload Velopack release
+        shell: pwsh
+        run: |
+          dotnet tool install -g vpk
+          # Fetch the previous release (if any) so vpk can build a delta package. Worth far more
+          # here than in a normal app: ~140 MB of the package is FFmpeg, byte-identical between
+          # releases, so a delta is a few MB and a missing one is the whole thing.
+          # Fails on the very first release when the repo has none - that's fine.
+          vpk download github --repoUrl https://github.com/${{ github.repository }} --token ${{ secrets.GITHUB_TOKEN }}
+          if ($LASTEXITCODE -ne 0) { Write-Host "No previous release found; building full package only." }
+          # Conditional so a release can be cut before the icon lands; vpk fails on a path that
+          # is not there.
+          $icon = if (Test-Path 'src/BertCut.App/Assets/app.ico') { @('--icon', 'src/BertCut.App/Assets/app.ico') } else { @() }
+          vpk pack --packId BertCut --packVersion ${{ steps.ver.outputs.version }} `
+            --packDir publish --mainExe BertCut.exe --packTitle BertCut `
+            --packAuthors "Rob Walsh" @icon
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          vpk upload github --repoUrl https://github.com/${{ github.repository }} `
+            --token ${{ secrets.GITHUB_TOKEN }} --publish `
+            --releaseName "BertCut ${{ steps.ver.outputs.version }}" `
+            --tag ${{ github.ref_name }}
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+  # Opens a pull request at microsoft/winget-pkgs for the release the job above published.
+  # It builds the new manifest from the newest one already upstream, so whatever is published
+  # there is the template for every version after it - a wrong installer type or a stale URL
+  # propagates rather than being corrected. See docs/build-and-release.md.
+  # Needs a classic PAT with public_repo (secret WINGET_PAT) and a winget-pkgs fork on the account.
+  # A failure here does not affect the release itself; it can be re-run, or submitted by hand.
+  winget:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: vedantmgoyal9/winget-releaser@v2
+        with:
+          identifier: RobWalsh.BertCut
+          installers-regex: 'Setup\.exe$'
+          release-tag: ${{ github.ref_name }}
+          release-notes-url: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}
+          token: ${{ secrets.WINGET_PAT }}

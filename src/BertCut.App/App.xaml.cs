@@ -1,15 +1,34 @@
 using System.IO;
 using System.Windows;
+using BertCut.Core.Session;
 using BertCut.Media;
 using BertCut.Media.Decode;
+using Velopack;
 
 namespace BertCut.App;
 
 public partial class App : Application
 {
+    [STAThread]
+    private static void Main()
+    {
+        // Must run before any WPF code: this handles Velopack's install, update and uninstall
+        // hooks, which re-launch this exe and expect the process to exit again immediately.
+        // Anything above it runs during an install.
+        VelopackApp.Build().Run();
+
+        var app = new App();
+        app.InitializeComponent();
+        app.Run();
+    }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // Before anything reads a session. State used to live in %LOCALAPPDATA%\BertCut, which is
+        // now the Velopack install directory and emptied by every update.
+        AppPaths.MigrateLegacyData();
 
         FfmpegRuntime runtime;
 
@@ -25,7 +44,10 @@ public partial class App : Application
         {
             MessageBox.Show(
                 error.Message + Environment.NewLine + Environment.NewLine +
-                "Run tools/fetch-ffmpeg.ps1 from the repository root to install it.",
+                "Running from a source tree? Run tools/fetch-ffmpeg.ps1 from the repository root." +
+                Environment.NewLine +
+                "Installed BertCut? This copy is incomplete — reinstall it from " +
+                "https://github.com/robgwalsh/bertcut/releases/latest.",
                 "BertCut — FFmpeg not found",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
@@ -47,5 +69,9 @@ public partial class App : Application
         // recording, open with BertCut" a one-step workflow.
         if (e.Args.Length > 0 && File.Exists(e.Args[0]))
             _ = window.Dispatcher.InvokeAsync(() => window.OpenPath(e.Args[0]));
+
+        // Last, and on a background thread: the window is already up, and a copy that was never
+        // installed returns from this immediately.
+        _ = Task.Run(() => new UpdateService().CheckAndStageUpdateAsync());
     }
 }

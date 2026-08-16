@@ -153,6 +153,28 @@ internal sealed class UiSession : IDisposable
             throw new TimeoutException(
                 $"The editor was still busy after {_options.BusyTimeoutMs} ms.");
 
+        // Frames are composited on a thread of their own now, so the picture is not ready
+        // just because the dispatcher has nothing left to run. Waiting here rather than in
+        // each capture is enough because every command that changes anything ends in a
+        // Settle — and the pump reports idle when the frame under the playhead is done,
+        // deliberately not waiting out the speculative ones behind it.
+        //
+        // A loop rather than a wait, because presenting a frame can ask for another: the
+        // preview pane sizes itself to the picture, so the first frame of a newly opened
+        // video is what settles how much detail is worth compositing, and that answer sends
+        // it back to be rendered again at the size it should have been.
+        var rendering = Stopwatch.StartNew();
+
+        while (!Dispatcher.Invoke(() => Model.PreviewSettled))
+        {
+            if (rendering.ElapsedMilliseconds >= _options.BusyTimeoutMs)
+                throw new TimeoutException(
+                    $"The preview never caught up with the playhead after {_options.BusyTimeoutMs} ms.");
+
+            Dispatcher.Invoke(() => Model.WaitForPreviewIdle(_options.BusyTimeoutMs));
+            Dispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
+        }
+
         if (quietMs > 0)
         {
             var quiet = Stopwatch.StartNew();
@@ -182,8 +204,12 @@ internal sealed class UiSession : IDisposable
     public void Dispatch(EditorIntent intent) => Window.Invoke(intent);
 
     /// <summary>The composited video frame, with no interface around it.</summary>
-    public DecodedFrame? PreviewFrame =>
-        Model.Preview is { HasFrame: true } preview ? preview.Canvas : null;
+    /// <remarks>
+    /// The frame actually on screen, not the one the playhead names — which is the same thing
+    /// after a <see cref="Settle"/>, and that is what every command that changes anything ends
+    /// with.
+    /// </remarks>
+    public DecodedFrame? PreviewFrame => Model.CurrentFrame;
 
     public void Dispose()
     {

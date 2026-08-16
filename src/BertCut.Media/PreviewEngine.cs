@@ -12,9 +12,12 @@ namespace BertCut.Media;
 /// <remarks>
 /// <para>
 /// This is the software path. It composites into a BGRA buffer that a
-/// <c>WriteableBitmap</c> can take directly; at the resolutions this editor targets
-/// (typically 1280x768) that costs around a millisecond a frame, which is comfortably
-/// inside a 60 Hz budget for a single stream.
+/// <c>WriteableBitmap</c> can take directly.
+/// </para>
+/// <para>
+/// <b>Synchronous, and owned by one thread at a time.</b> The decoders under it are not
+/// thread-safe and neither is this. <see cref="PreviewPump"/> is what gives it a thread of
+/// its own in the app; tests drive it directly, on theirs.
 /// </para>
 /// <para>
 /// The geometry applied here comes from <see cref="TimelineResolver"/> — the same source
@@ -29,8 +32,18 @@ namespace BertCut.Media;
 /// </remarks>
 public sealed class PreviewEngine : IDisposable
 {
-    private readonly Dictionary<int, VideoDecoder> _decoders = [];
-    private readonly Dictionary<int, DecodedFrame> _buffers = [];
+    /// <summary>
+    /// Cached decoders, keyed by source <em>and by the size they scale to</em>.
+    /// </summary>
+    /// <remarks>
+    /// A cropped frame is decoded at the source's native size so the zoom is taken from real
+    /// pixels; everything else is decoded straight to the render size. One source can need
+    /// both — a timeline cropped in places and not in others — and a single cache slot would
+    /// hand the second caller a buffer of the wrong dimensions.
+    /// </remarks>
+    private readonly Dictionary<(int Source, bool Native), VideoDecoder> _decoders = [];
+    private readonly Dictionary<(int Source, bool Native), DecodedFrame> _buffers = [];
+
     private readonly Func<int, SourceIndex> _indexOf;
     private readonly Func<int, string> _pathOf;
     private OutputFormat _output;
@@ -38,10 +51,15 @@ public sealed class PreviewEngine : IDisposable
 
     public PreviewEngine(OutputFormat output, Func<int, SourceIndex> indexOf, Func<int, string> pathOf)
     {
+        ArgumentNullException.ThrowIfNull(output);
+
         _output = output;
         _indexOf = indexOf;
         _pathOf = pathOf;
-        Canvas = new DecodedFrame(output.Width, output.Height);
+
+        RenderWidth = output.Width;
+        RenderHeight = output.Height;
+        Canvas = new DecodedFrame(RenderWidth, RenderHeight);
     }
 
     /// <summary>The composited output frame.</summary>
@@ -51,61 +69,116 @@ public sealed class PreviewEngine : IDisposable
     public bool HasFrame { get; private set; }
 
     /// <summary>
+    /// The size frames are composited at, which defaults to the output size.
+    /// </summary>
+    /// <remarks>
+    /// Separate from the output format because the preview only ever has to be as detailed
+    /// as the area it is displayed in, and every pixel above that is scaled, copied and
+    /// uploaded once a frame for nothing. Geometry is unaffected: crop and overlay
+    /// rectangles are in output space and are mapped through on the way in, so a preview
+    /// rendered at half size shows the same composition, smaller.
+    /// </remarks>
+    public int RenderWidth { get; private set; }
+
+    public int RenderHeight { get; private set; }
+
+    /// <summary>A buffer this engine can render into, at the current render size.</summary>
+    public DecodedFrame NewFrame() => new(RenderWidth, RenderHeight);
+
+    /// <summary>
     /// Composites the timeline frame at <paramref name="timelineFrame"/> into <see cref="Canvas"/>.
     /// </summary>
     public bool Render(TimelineResolver resolver, long timelineFrame)
     {
+        HasFrame = Render(resolver, timelineFrame, Canvas);
+        return HasFrame;
+    }
+
+    /// <summary>
+    /// Composites the timeline frame at <paramref name="timelineFrame"/> into
+    /// <paramref name="target"/>, which must be at the current render size.
+    /// </summary>
+    /// <remarks>
+    /// Rendering into a caller-supplied buffer is what lets the pump keep several frames
+    /// alive at once: one being displayed, one being filled, and the rest read ahead.
+    /// </remarks>
+    public bool Render(TimelineResolver resolver, long timelineFrame, DecodedFrame target)
+    {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(resolver);
+        ArgumentNullException.ThrowIfNull(target);
 
-        if (resolver.Resolve(timelineFrame) is not { } resolution)
+        if (target.Width != RenderWidth || target.Height != RenderHeight)
+            throw new ArgumentException(
+                $"The target is {target.Width}x{target.Height}; this engine renders {RenderWidth}x{RenderHeight}.",
+                nameof(target));
+
+        if (resolver.Resolve(timelineFrame) is not { } resolution) return false;
+
+        var project = resolver.Project;
+
+        // The overwhelmingly common frame: no crop, no overlay. The decoder scales straight
+        // into the caller's buffer, so nothing is composited and nothing is copied.
+        if (resolution is { Crop: null, Overlay: null })
         {
-            HasFrame = false;
-            return false;
+            var decoder = DecoderFor(project, resolution.SourceId, native: false);
+            if (!decoder.TryDecodeFrame(resolution.SourceFrame, target)) return false;
+
+            target.FrameIndex = timelineFrame;
+            return true;
         }
 
-        // The base layer is decoded straight to the output size, so an uncropped frame
-        // needs no compositing pass at all — the common case costs one decode and one copy.
-        var scaled = resolution.Crop is null;
-        var baseFrame = Decode(resolution.SourceId, resolution.SourceFrame, scaled);
-        if (baseFrame is null)
-        {
-            HasFrame = false;
-            return false;
-        }
+        // A crop reads from native pixels; an overlay's base does not, because the base is
+        // still shown whole.
+        var native = resolution.Crop is not null;
+        var baseFrame = Decode(project, resolution.SourceId, resolution.SourceFrame, native);
+        if (baseFrame is null) return false;
 
-        if (resolution.Crop is { } crop)
-            ZoomCropInto(baseFrame, crop, Canvas);
-        else
-            Array.Copy(baseFrame.Pixels, Canvas.Pixels, Canvas.Pixels.Length);
+        if (resolution.Crop is { } crop) ZoomCropInto(baseFrame, crop, target);
+        else Array.Copy(baseFrame.Pixels, target.Pixels, target.Pixels.Length);
 
         if (resolution.Overlay is { } overlay)
         {
-            var overlayFrame = Decode(overlay.SourceId, resolution.OverlaySourceFrame, scaled: false);
-            if (overlayFrame is not null) BlitInto(overlayFrame, overlay.Dest, Canvas);
+            var overlayFrame = Decode(project, overlay.SourceId, resolution.OverlaySourceFrame, native: true);
+            if (overlayFrame is not null) BlitInto(overlayFrame, overlay.Dest, target, _output);
         }
 
-        Canvas.FrameIndex = timelineFrame;
-        HasFrame = true;
+        target.FrameIndex = timelineFrame;
         return true;
     }
 
     /// <summary>Re-creates the canvas when the project's output size changes.</summary>
+    /// <remarks>
+    /// A render size set by the caller survives an output whose dimensions did not change,
+    /// which is every ordinary edit — rebuilding every decoder on each keystroke would cost
+    /// far more than this saves.
+    /// </remarks>
     public void SetOutput(OutputFormat output)
     {
-        if (output.Width == _output.Width && output.Height == _output.Height)
-        {
-            _output = output;
-            return;
-        }
+        ArgumentNullException.ThrowIfNull(output);
 
+        var sameSize = output.Width == _output.Width && output.Height == _output.Height;
         _output = output;
-        Canvas = new DecodedFrame(output.Width, output.Height);
-        HasFrame = false;
 
-        // Decoders scale on output, so they all have to be rebuilt at the new size.
-        foreach (var decoder in _decoders.Values) decoder.Dispose();
-        _decoders.Clear();
-        _buffers.Clear();
+        if (!sameSize) Resize(output.Width, output.Height);
+    }
+
+    /// <summary>
+    /// Composites at <paramref name="width"/> x <paramref name="height"/> instead of at the
+    /// output size.
+    /// </summary>
+    /// <remarks>
+    /// Every cached decoder scales on output, so all of them are rebuilt. Callers are
+    /// expected to snap to a few stable sizes rather than track a window edge continuously.
+    /// </remarks>
+    public void SetRenderSize(int width, int height)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(height, 1);
+
+        if (width == RenderWidth && height == RenderHeight) return;
+
+        Resize(width, height);
     }
 
     /// <summary>Closes every open decoder, e.g. before the project's sources change.</summary>
@@ -117,33 +190,42 @@ public sealed class PreviewEngine : IDisposable
         HasFrame = false;
     }
 
-    private DecodedFrame? Decode(int sourceId, long sourceFrame, bool scaled)
+    private void Resize(int width, int height)
     {
-        if (!_decoders.TryGetValue(sourceId, out var decoder))
-        {
-            var index = _indexOf(sourceId);
+        RenderWidth = width;
+        RenderHeight = height;
+        Canvas = new DecodedFrame(width, height);
 
-            // When a crop is in play the source is decoded at native size so the crop is
-            // taken from real pixels rather than from an already-downscaled image.
-            var (width, height) = scaled
-                ? (_output.Width, _output.Height)
-                : NativeSize(sourceId);
+        Reset();
+    }
 
-            decoder = new VideoDecoder(_pathOf(sourceId), index, width, height);
-            _decoders[sourceId] = decoder;
-            _buffers[sourceId] = new DecodedFrame(width, height);
-        }
+    private DecodedFrame? Decode(Project project, int sourceId, long sourceFrame, bool native)
+    {
+        var decoder = DecoderFor(project, sourceId, native);
+        var buffer = _buffers[(sourceId, native)];
 
-        var buffer = _buffers[sourceId];
         return decoder.TryDecodeFrame(sourceFrame, buffer) ? buffer : null;
     }
 
-    private (int Width, int Height) NativeSize(int sourceId)
+    private VideoDecoder DecoderFor(Project project, int sourceId, bool native)
     {
-        // Opened briefly to learn the source's real dimensions; the decoder created
-        // afterwards keeps them.
-        using var probe = new VideoDecoder(_pathOf(sourceId), _indexOf(sourceId), 16, 16);
-        return (probe.SourceWidth, probe.SourceHeight);
+        var key = (sourceId, native);
+        if (_decoders.TryGetValue(key, out var existing)) return existing;
+
+        // The source's own dimensions come off the document, which already carries them from
+        // the probe. Opening a second decoder just to read them back cost a file open, a
+        // codec init and a scaler context every time a crop or an overlay came into view.
+        var media = project.RequireSource(sourceId);
+
+        var (width, height) = native
+            ? (media.Width, media.Height)
+            : (RenderWidth, RenderHeight);
+
+        var decoder = new VideoDecoder(_pathOf(sourceId), _indexOf(sourceId), width, height);
+        _decoders[key] = decoder;
+        _buffers[key] = new DecodedFrame(width, height);
+
+        return decoder;
     }
 
     /// <summary>
@@ -187,27 +269,42 @@ public sealed class PreviewEngine : IDisposable
     }
 
     /// <summary>Draws the overlay into its destination rectangle, scaling to fit.</summary>
-    private static void BlitInto(DecodedFrame source, RectI dest, DecodedFrame canvas)
+    /// <remarks>
+    /// The destination is in output-space pixels, so it is mapped onto the canvas rather
+    /// than used directly — a preview rendered at half size puts the clip in the same place,
+    /// half as large.
+    /// </remarks>
+    private static void BlitInto(DecodedFrame source, RectI dest, DecodedFrame canvas, OutputFormat output)
     {
         if (dest.W <= 0 || dest.H <= 0) return;
 
-        var stepX = (double)source.Width / dest.W;
-        var stepY = (double)source.Height / dest.H;
+        var toCanvasX = (double)canvas.Width / output.Width;
+        var toCanvasY = (double)canvas.Height / output.Height;
 
-        var x0 = Math.Max(0, dest.X);
-        var y0 = Math.Max(0, dest.Y);
-        var x1 = Math.Min(canvas.Width, dest.X + dest.W);
-        var y1 = Math.Min(canvas.Height, dest.Y + dest.H);
+        var destX = dest.X * toCanvasX;
+        var destY = dest.Y * toCanvasY;
+        var destW = dest.W * toCanvasX;
+        var destH = dest.H * toCanvasY;
+
+        if (destW < 1 || destH < 1) return;
+
+        var stepX = source.Width / destW;
+        var stepY = source.Height / destH;
+
+        var x0 = Math.Max(0, (int)destX);
+        var y0 = Math.Max(0, (int)destY);
+        var x1 = Math.Min(canvas.Width, (int)(destX + destW));
+        var y1 = Math.Min(canvas.Height, (int)(destY + destH));
 
         for (var y = y0; y < y1; y++)
         {
-            var sourceY = Math.Clamp((int)((y - dest.Y) * stepY), 0, source.Height - 1);
+            var sourceY = Math.Clamp((int)((y - destY) * stepY), 0, source.Height - 1);
             var sourceRow = sourceY * source.Stride;
             var targetRow = y * canvas.Stride;
 
             for (var x = x0; x < x1; x++)
             {
-                var sourceX = Math.Clamp((int)((x - dest.X) * stepX), 0, source.Width - 1);
+                var sourceX = Math.Clamp((int)((x - destX) * stepX), 0, source.Width - 1);
                 var s = sourceRow + (sourceX * 4);
                 var t = targetRow + (x * 4);
 

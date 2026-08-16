@@ -50,9 +50,16 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
     private EditorDocument _document = new(EmptyProject());
     private TimelineResolver _resolver;
-    private PreviewEngine? _preview;
+    private PreviewPump? _pump;
+    private DecodedFrame? _frame;
     private string? _sessionKey;
     private bool _isMuted;
+
+    /// <summary>
+    /// The render size the shell has asked for, kept so a newly opened video adopts it
+    /// without waiting for the next window resize.
+    /// </summary>
+    private (int Width, int Height)? _renderSize;
 
     private EditorMode _mode = EditorMode.Normal;
     private RectI _pendingRect;
@@ -87,8 +94,13 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    /// <summary>Raised when the rendered frame changed and the surface should repaint.</summary>
-    public event Action? FrameChanged;
+    /// <summary>Raised on the UI thread when a new composited frame is ready to present.</summary>
+    /// <remarks>
+    /// Carries the frame rather than letting the shell reach back through the pump for it.
+    /// The buffer is on loan for as long as it is the one on screen, and only this class
+    /// knows when that stops being true.
+    /// </remarks>
+    public event Action<DecodedFrame>? FrameChanged;
 
     /// <summary>
     /// Raised when a source's audio envelope became available.
@@ -115,7 +127,15 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
     public Project Project => _document.Current;
 
-    public PreviewEngine? Preview => _preview;
+    /// <summary>The composited frame currently on screen, or null before the first one.</summary>
+    public DecodedFrame? CurrentFrame => _frame;
+
+    /// <summary>
+    /// The size the preview is being composited at, which is the displayed size rather than
+    /// the project's. Null with nothing open.
+    /// </summary>
+    public (int Width, int Height)? PreviewRenderSize =>
+        _pump is null ? null : (_pump.RenderWidth, _pump.RenderHeight);
 
     public EditorMode Mode
     {
@@ -453,11 +473,8 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
             _player.Stop();
             _peaks.Clear();
 
-            _preview?.Dispose();
-            _preview = new PreviewEngine(
-                output,
-                id => _indices[id],
-                id => _document.Current.RequireSource(id).Path);
+            DisposePump();
+            _pump = CreatePump(output);
 
             if (usable)
             {
@@ -649,7 +666,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
         // Decoders are cached per source, and the sources that were dropped here will
         // never be asked for again.
-        _preview?.Reset();
+        _pump?.Reset();
         RenderCurrentFrame();
 
         Status = "Reset to the original video — Ctrl+Z to undo";
@@ -701,8 +718,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         EndOverlayDrag();
         EndSegmentDrag();
 
-        _preview?.Dispose();
-        _preview = null;
+        DisposePump();
 
         _peaks.Clear();
 
@@ -1841,6 +1857,12 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     /// </remarks>
     public void Tick()
     {
+        // Whatever the transport is doing, a frame the pump finished since the last tick
+        // belongs on screen. During playback this is the path that presents almost every
+        // frame: the ring already holds it, so the request the playhead raises below finds
+        // nothing to decode and there is no second event to wait for.
+        PresentLatest();
+
         if (ShuttleRate == 0 || !HasMedia) return;
 
         var target = _player.IsRunning
@@ -1896,39 +1918,133 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         Playhead = frame;
     }
 
+    /// <summary>
+    /// Asks the pump for the frame under the playhead. Returns immediately.
+    /// </summary>
+    /// <remarks>
+    /// This used to decode inline, which meant every seek — a scrub, a ruler click, an
+    /// arrival at a cut boundary — stopped the UI thread for the length of a seek. The
+    /// picture now arrives through <see cref="PresentLatest"/> whenever it is ready, which
+    /// during playback is usually before it was asked for.
+    /// </remarks>
     private void RenderCurrentFrame()
     {
-        if (_preview is null || !HasMedia) return;
+        if (_pump is null || !HasMedia) return;
 
-        try
-        {
-            if (_preview.Render(PreviewResolver(), _playhead)) FrameChanged?.Invoke();
-        }
-        catch (Exception e) when (e is InvalidOperationException or IOException)
-        {
-            Status = $"Preview failed: {e.Message}";
-        }
+        _pump.Request(PreviewProject(), _playhead, ShuttleRate);
+        PresentLatest();
     }
 
     /// <summary>
-    /// The resolver the preview renders through, including any in-progress placement.
+    /// Puts the frame under the playhead on screen, if the pump has it.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// Idempotent, and called from both directions: from the pump, when a frame it was asked
+    /// for lands, and from the composition tick, where during playback the frame is usually
+    /// already waiting in the ring.
+    /// </para>
+    /// <para>
+    /// <b>The nearest frame, not the playhead's.</b> During playback they are the same thing.
+    /// During a drag they are not: every position is a seek, the playhead has moved again by
+    /// the time one lands, and demanding an exact match threw away every frame that arrived
+    /// while the pointer was still moving — so the picture only changed when the drag paused.
+    /// Whatever is closest than what is on screen is worth showing.
+    /// </para>
+    /// </remarks>
+    private void PresentLatest()
+    {
+        if (_pump is null) return;
+        if (_pump.LeaseNearest(_playhead, _frame?.FrameIndex) is not { } next) return;
+
+        var previous = _frame;
+        _frame = next;
+
+        FrameChanged?.Invoke(next);
+
+        // Only once the shell has copied out of it, and never the one just taken: the pump is
+        // free to overwrite a returned buffer the moment it has it back.
+        if (previous is not null) _pump.Return(previous);
+    }
+
+    /// <summary>
+    /// The project the preview renders, including any in-progress placement.
+    /// </summary>
+    /// <remarks>
+    /// <para>
     /// The two placements want opposite things from the preview. A pending <b>overlay</b>
     /// is composited live, because the whole point of positioning it is seeing where its
     /// picture lands. A pending <b>crop</b> deliberately is not applied: while choosing the
     /// region you need to see the frame you are choosing from, not the zoomed result. The
     /// rectangle is drawn over the preview instead, and the zoom appears on commit.
+    /// </para>
+    /// <para>
+    /// A project rather than a resolver, because the resolver is the one thing here that is
+    /// <em>not</em> shareable across threads — its hint cache makes it stateful. The pump
+    /// builds its own from this and keeps it until the reference changes, which is exactly
+    /// what immutability makes safe.
+    /// </para>
     /// </remarks>
-    private TimelineResolver PreviewResolver()
+    private Project PreviewProject()
     {
-        if (Mode != EditorMode.Overlay) return _resolver;
+        if (Mode != EditorMode.Overlay) return Project;
 
         var clip = new OverlayClip(
             PendingRange, PendingOverlaySourceId, PendingOverlaySourceStart, PendingRect);
 
-        return new TimelineResolver(TimelineEdits.AddOverlay(Project, clip));
+        return TimelineEdits.AddOverlay(Project, clip);
     }
+
+    /// <summary>
+    /// Composites at this size rather than at the project's output size.
+    /// </summary>
+    /// <remarks>
+    /// The shell works it out from the area the picture actually occupies. Nothing else
+    /// changes: crop and overlay geometry stays in output space and is mapped through on the
+    /// way into the canvas.
+    /// </remarks>
+    public void SetRenderSize(int width, int height)
+    {
+        if (width < 1 || height < 1) return;
+        if (_renderSize == (width, height)) return;
+
+        _renderSize = (width, height);
+        _pump?.SetRenderSize(width, height);
+
+        // The ring was rebuilt at the new size, so the frame on screen is one the pump no
+        // longer owns and the playhead's frame has to be asked for again.
+        _frame = null;
+        RenderCurrentFrame();
+    }
+
+    /// <summary>
+    /// Blocks until the frame under the playhead has been composited and presented.
+    /// </summary>
+    /// <remarks>
+    /// For the harness only. Rendering is asynchronous now, and a capture taken without this
+    /// would photograph whatever happened to be on screen when the script got there.
+    /// </remarks>
+    public bool WaitForPreviewIdle(int timeoutMs)
+    {
+        if (_pump is null) return true;
+
+        var idle = _pump.WaitForIdle(TimeSpan.FromMilliseconds(timeoutMs));
+        PresentLatest();
+
+        return idle;
+    }
+
+    /// <summary>
+    /// Whether the picture on screen is the playhead's frame.
+    /// </summary>
+    /// <remarks>
+    /// The harness's stopping condition, and not the same question as "is the pump idle".
+    /// Presenting a frame can ask for another: the preview pane sizes itself to the picture,
+    /// so the first frame of a newly opened video is what tells the shell how much detail is
+    /// worth compositing, and the answer sends the frame back to be rendered again.
+    /// </remarks>
+    public bool PreviewSettled =>
+        _pump is null || !HasMedia || _frame?.FrameIndex == _playhead;
 
     private void OnDocumentChanged(Project project)
     {
@@ -1950,7 +2066,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         // clip, under a band that is still being aimed.
         UpdatePendingRange();
 
-        _preview?.SetOutput(project.Output);
+        _pump?.SetOutput(project.Output);
         RestartAudioIfPlaying();
 
         Notify(nameof(Project));
@@ -2001,8 +2117,50 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     {
         _autosave.Stop();
 
-        // Before the preview, for the same reason as in CloseAll: this one owns a thread.
+        // Both of these own a thread, and both hold decoders that keep the source files open
+        // until the thread they were opened on has been joined.
         _player.Dispose();
-        _preview?.Dispose();
+        DisposePump();
+    }
+
+    /// <summary>
+    /// Builds the pump for a newly opened project and subscribes to it.
+    /// </summary>
+    /// <remarks>
+    /// Recreated per open rather than re-pointed, because the lookups it decodes through are
+    /// closed over the indices and the document, and an open replaces both. The render size
+    /// the shell last asked for is carried across, so a second video does not spend its first
+    /// frame at full resolution before the next resize corrects it.
+    /// </remarks>
+    private PreviewPump CreatePump(OutputFormat output)
+    {
+        var pump = new PreviewPump(
+            output,
+            id => _indices[id],
+            id => _document.Current.RequireSource(id).Path);
+
+        // Both fire on the pump thread, so both hop back. Render priority for the frame,
+        // because it is a repaint and should not queue behind background work; the status
+        // line can wait.
+        pump.FrameReady += () => _dispatcher.BeginInvoke(PresentLatest, DispatcherPriority.Render);
+
+        pump.Failed += message => _dispatcher.BeginInvoke(
+            () => Status = $"Preview failed: {message}", DispatcherPriority.Background);
+
+        if (_renderSize is { } size) pump.SetRenderSize(size.Width, size.Height);
+
+        return pump;
+    }
+
+    private void DisposePump()
+    {
+        var pump = _pump;
+        _pump = null;
+
+        // Dropped first: it is on loan from a ring that is about to go, and holding a
+        // reference to it past the dispose would keep a frame of a closed video on screen.
+        _frame = null;
+
+        pump?.Dispose();
     }
 }

@@ -101,6 +101,7 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
             case "select-segment": SelectSegment(rest); break;
             case "drag-segment": DragSegment(rest); break;
             case "scrub": Scrub(rest); break;
+            case "drag-playhead": DragPlayhead(rest); break;
 
             case "goto": Goto(rest); break;
             case "play": session.Dispatch(EditorIntent.PlayPause); break;
@@ -372,6 +373,44 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
         session.Settle();
     }
 
+    /// <summary>
+    /// Drags the playhead along the ruler, as a hand does.
+    /// </summary>
+    /// <remarks>
+    /// Different from a run of <c>scrub</c>s in the one way that matters: the pointer stays
+    /// down, so every position is a <c>PointerMove</c> and the playhead outruns the decoder
+    /// exactly as it does under a real hand. That is the gesture that caught the preview
+    /// showing almost nothing while it moved — frames were arriving, and each was thrown away
+    /// for no longer being the playhead's by the time it landed. Nothing built out of
+    /// press-and-release could have found it.
+    /// </remarks>
+    private void DragPlayhead(string rest)
+    {
+        var (fromText, toText) = Split(rest);
+        var from = Number(fromText, "drag-playhead");
+        var to = Number(toText, "drag-playhead");
+
+        session.Dispatcher.Invoke(() =>
+        {
+            var timeline = session.Window.Timeline;
+            timeline.PointerDown(timeline.RulerPoint(from));
+        });
+
+        session.Settle();
+
+        session.Dispatcher.Invoke(() =>
+        {
+            var timeline = session.Window.Timeline;
+
+            for (var step = 1; step <= DragSteps; step++)
+                timeline.PointerMove(timeline.RulerPoint(from + ((to - from) * step / DragSteps)));
+
+            timeline.PointerUp();
+        });
+
+        session.Settle();
+    }
+
     /// <summary>Clicks a base segment, on the part of the track clear of any overlay band.</summary>
     private void SelectSegment(string rest)
     {
@@ -580,6 +619,13 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
 
             ("muted", model.IsMuted ? "true" : "false"),
             ("canUndo", model.CanUndo ? "true" : "false"),
+
+            // What the preview is actually composited at, which is the size it is displayed
+            // at rather than the project's own. Nothing else in a run would show it, and a
+            // divisor that quietly stopped being applied would look exactly like one that was.
+            ("previewSize",
+                model.PreviewRenderSize is { } render ? Quote($"{render.Width}x{render.Height}") : "null"),
+
             ("status", Quote(model.Status)),
         };
 

@@ -1,0 +1,80 @@
+# Playback and scrubbing, which is where decoding used to be paid for on the UI thread.
+#
+# Frames are composited on the pump's own thread now and read ahead of the playhead, so what
+# this checks is that the picture still keeps up with the clock and that a scrub does not
+# wait for one. Bounded assertions throughout: playback runs off a real clock, and `sleep`
+# blocks the dispatcher so the tick after it is what catches the playhead up.
+
+sample clip.mp4 12
+open clip.mp4
+assert-has-media
+
+# ---- forward at 1x ------------------------------------------------------------------
+goto 60
+assert-frame 60
+
+play
+sleep 300
+tick
+assert-frame-between 66 78
+
+sleep 300
+tick
+assert-frame-between 75 93
+stop
+
+# The frame the playhead landed on is the frame on screen: dump-preview reads what was
+# presented, and testsrc2 prints its own number into the picture.
+dump-preview 01-during-playback.png
+shot 02-playing
+
+# ---- click-dragging the playhead --------------------------------------------------------
+# The pointer stays down, so the playhead moves faster than any decoder can follow. What
+# broke here once was subtle: frames were arriving the whole time and every one was discarded
+# for no longer being the playhead's by the time it landed, so the picture only changed when
+# the hand paused. Backwards is the harder direction — nothing read ahead is any use.
+drag-playhead 30 330
+assert-frame 330
+shot 03-dragged-forward
+
+drag-playhead 330 30
+assert-frame 30
+shot 04-dragged-backward
+dump-preview 05-after-drag.png
+
+# ---- scrubbing ------------------------------------------------------------------------
+# Each of these is a genuine seek across the file. They used to cost the length of half a
+# GOP on the UI thread apiece; the point of running a run of them is that the window is
+# still answering afterwards.
+scrub 300
+assert-frame 300
+scrub 20
+assert-frame 20
+scrub 280
+assert-frame 280
+scrub 100
+assert-frame 100
+scrub 340
+assert-frame 340
+scrub 5
+
+assert-frame 5
+assert-no-segment-selected
+shot 06-after-scrubbing
+dump-preview 07-scrubbed.png
+
+# ---- stepping backwards ---------------------------------------------------------------
+# A backwards step has no route to its frame but the preceding keyframe, so this is the
+# expensive direction. The window behind the playhead is filled in one run for that reason.
+goto 200
+
+key <
+key <
+key <
+assert-frame 197
+
+goto 200
+key >
+assert-frame 201
+
+state

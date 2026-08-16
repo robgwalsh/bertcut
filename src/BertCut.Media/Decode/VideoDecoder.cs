@@ -112,10 +112,17 @@ public sealed unsafe class VideoDecoder : IDisposable
             ffmpeg.avcodec_parameters_to_context(_codec, _format->streams[_streamIndex]->codecpar),
             "Configuring the decoder");
 
-        // Frame-level threading reorders output relative to input, which complicates the
-        // decode-and-discard seek below for no benefit at these resolutions.
-        _codec->thread_count = Math.Min(4, Environment.ProcessorCount);
-        _codec->thread_type = ffmpeg.FF_THREAD_SLICE;
+        // Frame-level threading, which was previously off — "it reorders output relative to
+        // input, which complicates the decode-and-discard seek below for no benefit at these
+        // resolutions". Re-measured on a 1280x768 recording once decoding moved off the UI
+        // thread, and it is worth 2.5x on a sequential frame (1.52 -> 0.59 ms) and 3x on a
+        // seek (84 -> 28 ms). The reordering was never a real objection: avcodec_receive_frame
+        // hands frames back in presentation order either way, so the discard loop below is
+        // unaffected. What it does cost is a few frames of latency after every flush, which
+        // is why this only became clearly worth it alongside a read-ahead that hides it.
+        // Zero means libavcodec sizes the pool from the machine.
+        _codec->thread_count = 0;
+        _codec->thread_type = ffmpeg.FF_THREAD_FRAME | ffmpeg.FF_THREAD_SLICE;
 
         FfmpegLoader.Check(ffmpeg.avcodec_open2(_codec, codec, null), "Opening the decoder");
 
@@ -178,7 +185,16 @@ public sealed unsafe class VideoDecoder : IDisposable
 
         if (frameIndex < 0 || frameIndex >= _index.FrameCount) return false;
 
-        if (_position == frameIndex && target.FrameIndex == frameIndex) return true;
+        // Already standing on it. The decoded picture is still in _frame — nothing unrefs it
+        // between calls — so a caller asking for it in a *different* buffer is one scale, not
+        // a decode. Without this, the check below would see a target it is not ahead of and
+        // seek to the preceding keyframe to redeliver a frame already in hand, which is how a
+        // pool of read-ahead buffers would have turned into a seek per frame.
+        if (_position == frameIndex)
+        {
+            if (target.FrameIndex != frameIndex) Convert(target, frameIndex);
+            return true;
+        }
 
         if (SeekIsCheaperThanDecodingOn(frameIndex)) SeekToKeyframeBefore(frameIndex);
 

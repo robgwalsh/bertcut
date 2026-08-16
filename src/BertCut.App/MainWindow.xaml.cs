@@ -12,6 +12,7 @@ using BertCut.Core.Input;
 using BertCut.Core.Session;
 using BertCut.Media;
 using BertCut.Media.Audio;
+using BertCut.Media.Decode;
 using Microsoft.Win32;
 
 namespace BertCut.App;
@@ -41,6 +42,11 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
+        // Which build this is, and with it which channel — "BertCut 1.2.3" against
+        // "BertCut 1.2.4-unstable.42". The title bar is outside the harness's client-area
+        // captures, so this cannot make a screenshot version-dependent.
+        Title = $"BertCut {AppVersion.Display}";
+
         _runtime = runtime;
         _model = new EditorViewModel(runtime, audioOutput);
         _model.PropertyChanged += OnModelChanged;
@@ -55,8 +61,14 @@ public partial class MainWindow : Window
         ApplyBindings();
 
         // Playback advances on the composition tick so frames land in step with WPF's
-        // own rendering rather than racing it from a timer.
+        // own rendering rather than racing it from a timer. It is also where a frame the
+        // pump finished between ticks gets picked up.
         CompositionTarget.Rendering += (_, _) => _model.Tick();
+
+        // How much detail the preview is worth compositing is a question about the pane, so
+        // it is answered here and re-answered whenever the pane changes size.
+        PreviewPane.SizeChanged += (_, _) => ApplyPreviewSize();
+        DpiChanged += (_, _) => ApplyPreviewSize();
 
         Loaded += (_, _) => Keyboard.Focus(this);
     }
@@ -727,18 +739,13 @@ public partial class MainWindow : Window
     /// Copies the composited frame into the WPF bitmap.
     /// </summary>
     /// <remarks>
-    /// The software preview path. At the resolutions this editor targets a frame is a few
-    /// megabytes and this costs about a millisecond, which is well inside a 60 Hz budget.
+    /// The whole of the UI thread's per-frame cost, now that the decode happens elsewhere:
+    /// one copy out of a buffer the pump has lent us for exactly as long as it is on screen.
     /// It is also the permanent fallback for remote desktop sessions and machines where
     /// hardware compositing is unavailable.
     /// </remarks>
-    private void Present()
+    private void Present(DecodedFrame frame)
     {
-        var preview = _model.Preview;
-        if (preview is null || !preview.HasFrame) return;
-
-        var frame = preview.Canvas;
-
         if (_surface is null || _surface.PixelWidth != frame.Width || _surface.PixelHeight != frame.Height)
         {
             _surface = new WriteableBitmap(frame.Width, frame.Height, 96, 96, PixelFormats.Bgra32, null);
@@ -752,6 +759,55 @@ public partial class MainWindow : Window
             frame.Stride,
             0);
     }
+
+    /// <summary>
+    /// Tells the model how much detail the picture on screen can actually show.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The preview used to be composited at the project's full output size and handed to WPF
+    /// to shrink — so a 1280x768 recording displayed in a 700px-wide pane scaled, copied and
+    /// uploaded four times the pixels it could show, and then paid for a HighQuality resample
+    /// on top. Rendering at the displayed size instead makes each of those a quarter the
+    /// work, and the result is sharper: ffmpeg's scaler does the reduction rather than WPF's.
+    /// </para>
+    /// <para>
+    /// <b>Snapped to an integer divisor</b>, and never below what is displayed. Following the
+    /// pane exactly would rebuild every decoder and scaler context continuously while a window
+    /// edge is being dragged; this way there are four possible sizes and a resize usually
+    /// changes nothing at all.
+    /// </para>
+    /// </remarks>
+    private void ApplyPreviewSize()
+    {
+        var output = _model.Project.Output;
+        if (output.Width <= 0 || output.Height <= 0) return;
+        if (PreviewPane.ActualWidth <= 0 || PreviewPane.ActualHeight <= 0) return;
+
+        // Stretch="Uniform", so the picture fits the tighter of the two axes.
+        var dpi = VisualTreeHelper.GetDpi(this);
+        var scale = Math.Min(
+            PreviewPane.ActualWidth * dpi.DpiScaleX / output.Width,
+            PreviewPane.ActualHeight * dpi.DpiScaleY / output.Height);
+
+        if (scale <= 0) return;
+
+        var divisor = Math.Clamp((int)Math.Ceiling(1 / scale), 1, MaxPreviewDivisor);
+
+        _model.SetRenderSize(
+            Math.Max(1, output.Width / divisor),
+            Math.Max(1, output.Height / divisor));
+    }
+
+    /// <summary>
+    /// How far below the output size the preview may be composited.
+    /// </summary>
+    /// <remarks>
+    /// A quarter in each axis is a sixteenth of the pixels, which is already past the point
+    /// where the saving matters and approaching the point where the picture stops being worth
+    /// looking at on a small window.
+    /// </remarks>
+    private const int MaxPreviewDivisor = 4;
 
     private static readonly Brush StoppedBrush = Frozen(Color.FromRgb(0xFF, 0x5C, 0x5C));
     private static readonly Brush MovingBrush = Frozen(Color.FromRgb(0x6D, 0xD4, 0x8B));
@@ -783,6 +839,10 @@ public partial class MainWindow : Window
         if (e.PropertyName is nameof(EditorViewModel.Status)) StatusLabel.Text = _model.Status;
 
         if (e.PropertyName is nameof(EditorViewModel.Mode)) SyncOverlaySourceCard();
+
+        // A new video brings its own output format, and the divisor is relative to it. The
+        // pane's own size has not changed, so nothing else would ask.
+        if (e.PropertyName is nameof(EditorViewModel.Project)) ApplyPreviewSize();
     }
 
     /// <summary>

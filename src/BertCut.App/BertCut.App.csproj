@@ -6,11 +6,34 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+
+    <!-- BertCut.exe, not BertCut.App.exe. It is the file vpk is told is the main executable,
+         what the installed shortcut points at, and what a user associates .mp4 with. -->
+    <AssemblyName>BertCut</AssemblyName>
+    <StartupObject>BertCut.App.App</StartupObject>
+
+    <!-- Conditional so the tree still builds before the icon lands. Once it exists this is
+         the Explorer and taskbar icon, and the workflows hand the same file to vpk for the
+         installer. -->
+    <ApplicationIcon Condition="Exists('Assets\app.ico')">Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <!-- App.xaml is a Page rather than the ApplicationDefinition, which is what suppresses the
+       generated entry point so our own Main can run VelopackApp.Build().Run() before any WPF
+       startup. InitializeComponent is still generated, so the harness — which constructs App
+       directly and never calls Main — is unaffected. -->
+  <ItemGroup>
+    <ApplicationDefinition Remove="App.xaml" />
+    <Page Include="App.xaml" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\BertCut.Media\BertCut.Media.csproj" />
     <ProjectReference Include="..\BertCut.Core\BertCut.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Velopack" Version="1.2.0" />
   </ItemGroup>
 
   <ItemGroup>

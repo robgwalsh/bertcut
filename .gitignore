@@ -10,6 +10,14 @@ TestResults/
 # Installed by tools/fetch-ffmpeg.ps1 — ~200 MB, and reproducible from that script.
 tools/ffmpeg/
 
+# What scripts/pack.ps1 and the release workflows produce. Anchored with a leading slash, so
+# neither pattern can match a source folder deeper in the tree that happens to share the name —
+# which is exactly how a directory gets silently untracked and builds locally right up until CI
+# checks out without it.
+/publish/
+/Releases/
+*.nupkg
+
 # Video, in a video editor's working tree, is almost always a sample someone dropped in
 # to try something rather than something meant to ship.
 *.mp4

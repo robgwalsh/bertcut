@@ -214,7 +214,11 @@
         <!-- Preview. Nothing here is focusable, so single-letter shortcuts always reach
              the window handler. -->
         <Border Grid.Row="1" Background="#0B0D10" Margin="12,12,12,6">
-            <Grid>
+            <!-- Named because it, not the Image, is what the preview's render size is worked
+                 out from. An Image with Stretch="Uniform" measures to its content, so it is
+                 zero-sized until the first frame arrives and would answer "how much room is
+                 there?" only after the answer had already been needed. -->
+            <Grid x:Name="PreviewPane">
                 <Image x:Name="PreviewImage"
                        Stretch="Uniform"
                        RenderOptions.BitmapScalingMode="HighQuality"

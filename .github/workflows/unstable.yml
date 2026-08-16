@@ -1,0 +1,126 @@
+# Publishes the latest code in main as the "unstable" channel: same build and same test suite as a
+# release, packed on a separate Velopack channel and published as a rolling GitHub pre-release.
+#
+# It cannot disturb a release. Different tag, different channel, different feed file - an installed
+# release copy looks for releases.win.json and never sees releases.unstable.json, and GitHub's
+# "latest" excludes pre-releases, so the README's stable download links skip this entirely.
+name: Unstable
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Pushes queue rather than cancel. Cancelling a run mid-upload strands a *draft* release holding the
+# `unstable` tag, and a draft has no tag as far as `gh release delete` is concerned - while vpk's own
+# collision check does see it, and refuses to publish. Every run after that would fail until someone
+# cleared it by hand. A superseded build costs a few minutes; a wedged channel costs a repair.
+concurrency:
+  group: unstable
+  cancel-in-progress: false
+
+jobs:
+  unstable:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # tags, so the last released version can be found
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      # The next patch after the last release, plus the run number: 1.1.2 -> 1.1.3-unstable.42.
+      # SemVer compares dot-separated numeric identifiers numerically, so .10 is above .7 - which a
+      # bare "-unstable42" would not be - and the whole thing sorts below the 1.1.3 it anticipates.
+      - name: Derive version
+        id: ver
+        shell: bash
+        run: |
+          # 'v[0-9]*' rather than 'v*', so only version tags can ever match - anything else would
+          # poison the -v:refname sort and silently change the base version.
+          latest=$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n1)
+          latest=${latest:-v0.0.0}
+          IFS=. read -r major minor patch <<< "${latest#v}"
+          version="$major.$minor.$((patch + 1))-unstable.${{ github.run_number }}"
+          echo "Latest release tag ${latest}; building ${version}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # See release.yml for why this is restored before the tests rather than before the publish.
+      - name: Cache FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: tools/ffmpeg
+          key: ffmpeg-n8.1-win64-lgpl-shared-v1
+
+      - name: Fetch FFmpeg
+        shell: pwsh
+        run: ./tools/fetch-ffmpeg.ps1
+
+      - name: Test
+        run: dotnet test BertCut.slnx -c Release
+
+      - name: Publish
+        run: >
+          dotnet publish src/BertCut.App/BertCut.App.csproj -c Release
+          -r win-x64 --self-contained true -p:Platform=x64
+          -p:Version=${{ steps.ver.outputs.version }} -o publish
+
+      # Deltas matter more here than on a release: an unstable copy takes an update on every push,
+      # and ~140 MB of the package is FFmpeg that has not changed. The delta is built here, against
+      # the package downloaded from the release that is still up - the replacement below happens
+      # afterwards and has no bearing on it, and a client applies the delta against its own local
+      # package anyway.
+      #
+      # --pre is required: the only release carrying releases.unstable.json is a pre-release, so
+      # without it the download finds nothing and the delta silently comes out full-sized.
+      - name: Pack
+        shell: pwsh
+        run: |
+          dotnet tool install -g vpk
+          # Absent on the first run, and during another run's upload window. vpk logs it and exits 0;
+          # a full-only package is a correct release, just a fat one.
+          vpk download github --repoUrl https://github.com/${{ github.repository }} `
+            --token ${{ secrets.GITHUB_TOKEN }} --channel unstable --pre
+          $icon = if (Test-Path 'src/BertCut.App/Assets/app.ico') { @('--icon', 'src/BertCut.App/Assets/app.ico') } else { @() }
+          vpk pack --packId BertCut --packVersion ${{ steps.ver.outputs.version }} `
+            --packDir publish --mainExe BertCut.exe --packTitle BertCut `
+            --packAuthors "Rob Walsh" @icon --channel unstable
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      # One rolling pre-release, so the README can link to it without the URL rotting - there is no
+      # "latest pre-release" download form. It is replaced rather than merged into: vpk refuses to
+      # add a second releases.unstable.json to a release that already has one, and GitHub ignores
+      # target_commitish for a tag that already exists, so the tag goes with it.
+      #
+      # Everything above this point can fail without touching what is published. Do not reorder -
+      # a pack that failed after the delete would leave no unstable release at all.
+      - name: Clear the previous rolling release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # By id rather than by tag, so a draft stranded by an interrupted run is cleared too - a
+          # draft holds the tag against vpk but is invisible to `gh release delete unstable`.
+          for id in $(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+                        --jq '.[] | select(.tag_name == "unstable") | .id'); do
+            echo "Deleting release $id"
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+          done
+          # The tag has to go with it, or GitHub keeps the old commitish when the release is recreated.
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/unstable" \
+            || echo "No unstable tag to remove."
+
+      # The release name is the bare version, because it is what the README's badge displays.
+      - name: Publish the rolling unstable release
+        shell: pwsh
+        run: |
+          vpk upload github --repoUrl https://github.com/${{ github.repository }} `
+            --token ${{ secrets.GITHUB_TOKEN }} --publish --pre --channel unstable `
+            --releaseName "${{ steps.ver.outputs.version }}" `
+            --tag unstable --targetCommitish ${{ github.sha }}
+          if ($LASTEXITCODE -ne 0) { exit 1 }

@@ -14,7 +14,7 @@ look at PNGs of it.
 ## Do not
 
 - `dotnet run --project src\BertCut.App`
-- run `BertCut.App.exe`
+- run `BertCut.exe`, whether from a build output or an installed copy
 - synthesise keystrokes or mouse input with any tool
 
 The only exception is the user explicitly asking you to launch the app.

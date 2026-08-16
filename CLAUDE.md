@@ -49,6 +49,75 @@ Three things are worth knowing before touching any of it:
 directory, keyed by content key exactly as the filmstrip is. It feeds both the waveform lane
 and the coarse correlation pass.
 
+## Where a frame comes from
+
+Nothing decodes on the UI thread. `BertCut.Media.PreviewPump` owns the `PreviewEngine`, runs
+it on a thread of its own, and reads ahead of the playhead; `EditorViewModel` posts a request
+and carries on. Four things follow, and each was got wrong first.
+
+- **Requests are latest-wins and the pump never blocks anybody.** A scrub costs one seek per
+  place the pointer rested rather than one per pixel it crossed. A real seek is 115 ms at
+  1280x768 and 195 ms at 1080p; paid inline on the thread that also repaints, that was the
+  window freezing for the length of a drag.
+- **What gets displayed is the nearest frame, not the playhead's.** During playback they are
+  the same thing, which is what made the mistake so easy: the ring holds the exact frame, so
+  demanding it looks right everywhere. A *drag* outruns the decoder by construction — every
+  position is a seek and the playhead has moved again by the time one lands — so an exact
+  match threw away every frame that arrived while the pointer was moving, and the picture
+  only changed when the hand paused. Dragging backwards, where nothing read ahead helps, that
+  was 0.3 fps; taking whatever is closer than what is on screen makes it 33. Driving it needs
+  a pointer that stays down: `drag-playhead` in the harness, not a run of `scrub`s.
+- **The ring is what makes a stall invisible.** Having served the frame it was asked for, the
+  pump keeps decoding until it runs out of buffers or something new is asked for, so a GC
+  pause, a layout pass or the seek at a cut boundary lands on frames decoded before anyone
+  wanted them. A 250 ms hiccup now costs 250 ms of playback and nothing else. The ring is
+  budgeted in **bytes**, not frames — a frame is 1 MB at 640x384 and 24 MB at 4K, so a count
+  would be either trivial or most of a gigabyte.
+- **Reverse is served a window at a time, not a frame at a time.** A backwards step has no
+  route but the preceding keyframe, so it is a seek — longer than a frame lasts, which means
+  serving one at a time never converges: the seek outlasts the frame period, the playhead has
+  moved on before it lands, and the speculative fill behind it never gets a turn. Frames are
+  quantised into fixed windows half the ring wide and a window is filled in one *ascending*
+  run — one seek, then a sequential decode — while the window before it is filled behind. That
+  took reverse from 12 fps to 29. Quantising rather than centring on the playhead is what
+  stops the window sliding a frame at a time and reintroducing the seek it exists to avoid.
+- **Eviction is ranked against the playhead and its direction**, not against the frame being
+  written. Ranking by plain distance throws out the far end of the read-ahead — the frame
+  wanted next — and leaves the ones already passed, so the ring churns and never gets ahead
+  of anything. Frames the playhead has passed go first; then the ones ahead, furthest first.
+
+A buffer is **leased**, not copied: the producer will not write over a slot that is out on
+loan, and the shell holds one for exactly as long as it is on screen. `WaitForIdle` reports
+when *the frame asked for* is ready and deliberately not when the speculative ones behind it
+are, so a scripted run does not wait out a dozen frames nobody asked about.
+
+`PreviewEngine` itself is unchanged in kind — synchronous, single-threaded, driven directly by
+`PreviewEngineTests` with no window. Everything that touches it, including `SetOutput`,
+`Reset` and `Dispose`, is a command the pump thread drains: freeing a decoder from the UI
+thread mid-`sws_scale` is a use-after-free rather than a race with a wrong answer.
+
+## The preview's own resolution
+
+The preview is composited at the size it is **displayed** at, not the project's output size.
+`MainWindow.ApplyPreviewSize` divides the output by the smallest integer that still meets the
+pane's physical pixels, capped at 4. A 3840x2160 project in this window renders at 1280x720 —
+a ninth of the pixels — and a 1280x768 one on a 200%-scaled 4K display correctly stays at full
+size, because the pane really does have 2286x1019 pixels to fill.
+
+Snapping to an integer divisor rather than tracking the pane exactly is the point: every
+cached decoder scales on output, so following a window edge would rebuild all of them and
+their scaler contexts continuously. There are four possible sizes and a resize usually changes
+nothing.
+
+Two things this is *not*. It is not a change to geometry — crop and overlay rectangles stay in
+output space and are mapped onto the canvas on the way in, which is why `RectEditor` needed no
+change. And it is not a loss of quality: it is sharper, because ffmpeg's scaler does the
+reduction instead of WPF resampling an oversized bitmap on every frame.
+
+The size the preview is actually running at is in the harness `state` line as `previewSize`.
+Nothing else in a run would show it, and a divisor that quietly stopped being applied looks
+exactly like one that was.
+
 ## Decoding a frame
 
 `VideoDecoder` is addressed by exact frame index, and landing on one means decoding forward
@@ -67,10 +136,23 @@ sequential", which is what it was:
   as long as it played. The cost scales with resolution times GOP length, which is why only
   the big files showed it.
 - **Backwards is still a seek**, because there is no route to an earlier frame but the
-  keyframe. Reverse playback costs ~85 ms a frame on that same file. Fixing it means keeping
-  decoded frames, which is a memory budget rather than a rule, and nothing keeps them yet.
-- The two `VideoDecoderTests` around `SeekCount` pin both halves. They count seeks rather
+  keyframe. Nothing here can fix that; it is fixed a level up, by the pump filling a whole
+  window behind the playhead in one forward run.
+- **Standing on the frame already is not a decode.** The last picture is still in `_frame` —
+  nothing unrefs it between calls — so delivering it into a *different* buffer is one scale.
+  Without that, the comparison above would see a target it is not ahead of and seek to the
+  preceding keyframe to redeliver a frame already in hand, which is how a pool of read-ahead
+  buffers turns into a seek per frame.
+- The two `VideoDecoderTests` around `SeekCount` pin the first two. They count seeks rather
   than timing them: the cost is real, but a stopwatch in a test fails on a busy machine.
+
+Frame-level threading is **on** (`FF_THREAD_FRAME | FF_THREAD_SLICE`, `thread_count = 0`). It
+used to be off, on the grounds that reordering complicated the discard loop for no benefit —
+but `avcodec_receive_frame` returns frames in presentation order either way, so there was
+nothing to complicate. Re-measured on that same file it is worth 2.5x on a sequential frame
+(1.52 → 0.59 ms) and 3x on a seek (84 → 28 ms). What it genuinely costs is a few frames of
+latency after every flush, which is why it only became clearly right alongside a read-ahead
+that hides it.
 
 ## The timeline strip
 
@@ -142,7 +224,7 @@ it, and a box appearing behind the card would answer a question nobody had asked
 
 ## Never launch the GUI
 
-`dotnet run --project src\BertCut.App` — and `BertCut.App.exe` — put a real window on the
+`dotnet run --project src\BertCut.App` — and `BertCut.exe` — put a real window on the
 user's screen, take keyboard focus, and compete with whatever they are doing. They multitask
 while you work. **Do not run either, ever**, including "just to check something quickly". The
 only exception is the user explicitly asking you to launch it.
@@ -167,6 +249,28 @@ entry there.
 
 FFmpeg lives in `tools/ffmpeg/` (gitignored, ~200 MB, reproduced by `tools/fetch-ffmpeg.ps1`).
 It is already installed here. Tests that need it skip when it is absent.
+
+## Releasing
+
+**The tag is the release.** No file carries a version: `git push origin vX.Y.Z` and
+`.github/workflows/release.yml` tests, publishes self-contained, packs with Velopack, uploads six
+assets to a GitHub Release and opens a winget PR. `unstable.yml` does the same off every push to
+`main`, on its own channel and its own rolling pre-release, and the two cannot reach each other.
+Installed copies update themselves from that feed through `UpdateService`; the app's own `Main`
+runs `VelopackApp.Build().Run()` first, which is why `App.xaml` is a `Page` rather than the
+`ApplicationDefinition`.
+
+Two things about this repo in particular, both of which fail silently:
+
+- **A package is only as good as `tools/ffmpeg` was at publish time.** It is gitignored, and the
+  `None` glob that carries it into the output matches nothing when it is absent — so the publish
+  succeeds and the installer has no decoder in it. CI fetches it before the *tests*, not just
+  before the publish, because the ffmpeg-dependent tests skip silently too.
+- **Nothing may be written to `%LOCALAPPDATA%\BertCut`.** That is the Velopack install directory
+  and the installer empties it on every update. See **State** below.
+
+Full detail, including the winget manifest and how to exercise the update path locally, is in
+[docs/build-and-release.md](docs/build-and-release.md). The `release` skill is the procedure.
 
 ## The harness
 
@@ -200,13 +304,16 @@ trim-overlay start|end <to> drag that end of the *selected* clip to <to>, which 
 select-segment <frame>      click the base track there, which picks that segment out
 drag-segment <from> <to>    drag that segment along the track, reordering as it goes
 scrub <frame>               click the ruler above the track — seeks, and deselects
+drag-playhead <from> <to>   press on the ruler and drag, so the playhead outruns the decoder
+                            the way it does under a hand. Not the same test as a run of
+                            scrubs: the pointer never lifts.
 goto <frame> | play | stop | tick [n] | sleep <ms> | reset | close | settle [ms]
 shot <name> [element]       PNG of the window, or of any x:Name'd element
 dump-preview <name>.png     the composited video frame alone, no interface
 state                       one JSON line: playhead, duration, marks, mode, hasMedia, crops,
                             overlays, segments, selectedSegment, overlaySourceStart,
                             selectedOverlay, overlayStart, overlayEnd, overlayLength, muted,
-                            canUndo, status
+                            canUndo, previewSize, status
 assert-status <substring> | assert-timecode <text> | assert-frame <n>
 assert-mode Normal|Crop|Overlay|OverlaySource   the card is a mode, and this is what says
                                                 a choice has been taken
@@ -262,20 +369,38 @@ ffmpeg-deterministic.
 **Playback assertions must be bounded.** Playback runs off a real clock — the audio device's
 own position at 1x forward, a stopwatch otherwise — so use `assert-frame-between`. For an exact
 frame, `goto` there. And `sleep` does not advance playback on its own: it blocks the dispatcher
-thread, so the composition tick cannot fire. Follow a `sleep` with `tick`.
+thread, so the composition tick cannot fire. Follow a `sleep` with `tick`. `tools/ui/playback.bcs`
+is the script for this ground, including a run of scrubs — the gesture that used to freeze the
+window for the length of a seek apiece.
+
+**`settle` waits for the picture, and it loops.** Frames are composited on the pump's thread,
+so the dispatcher going quiet no longer means the frame is ready; `Settle` waits for the pump
+too, and every command that changes anything ends in a `Settle`, so captures need nothing of
+their own. It loops because presenting a frame can ask for another: the preview pane sizes
+itself to the picture, so the first frame of a newly opened video is what settles how much
+detail is worth compositing, and that answer sends it back to be rendered again at the size it
+should have been. The stopping condition is `EditorViewModel.PreviewSettled` — the frame on
+screen is the playhead's — not "the pump is idle".
 
 ## State
 
 The app keeps sessions, key bindings, its thumbnail cache and its audio envelopes under
-`%LOCALAPPDATA%\BertCut`,
+`%USERPROFILE%\.bertcut`,
 autosaves every 750 ms, and restores by content key — so without isolation a test run would be
 restored into the user's editor next time they opened the same file. `BERTCUT_STATE_DIR`
 relocates that root (`BertCut.Core.Session.AppPaths`); the harness points it at a scratch
 directory per run and deletes it afterwards. `--keep-state` keeps it, which is how session
 restore gets tested across two runs.
 
+**It is the profile rather than `%LOCALAPPDATA%\BertCut` because that is now the Velopack install
+directory, and the installer deletes it** on install and on every update. State kept there would
+survive exactly until the first update landed. `AppPaths.MigrateLegacyData` moves what earlier
+builds left behind, once, and is skipped entirely when `BERTCUT_STATE_DIR` is set — a scripted run
+must not reach into the real profile in either direction. Nothing new goes under `%LOCALAPPDATA%`.
+
 FFmpeg discovery deliberately does *not* follow that variable — it is an installed tool, not
-state.
+state. It probes `%USERPROFILE%\.bertcut\ffmpeg` ahead of the old `%LOCALAPPDATA%` path for the
+same reason as above: a copy installed into the install directory would not survive an update.
 
 ## Measured behaviour of the offscreen window
 

@@ -93,6 +93,13 @@ public sealed partial class FfmpegRuntime
         var repo = FindRepoRoot(AppContext.BaseDirectory);
         if (repo is not null) yield return Path.Combine(repo, "tools", "ffmpeg");
 
+        // A copy the user installed themselves. In the profile rather than under LocalAppData,
+        // because %LOCALAPPDATA%\BertCut is the Velopack install directory and the installer
+        // empties it — an ffmpeg put there would survive exactly until the next update.
+        yield return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bertcut", "ffmpeg");
+
+        // The location that used to be, still honoured for anyone who put one there.
         yield return Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BertCut", "ffmpeg");
 
