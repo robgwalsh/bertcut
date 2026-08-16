@@ -157,11 +157,67 @@ public class KeyMapTests
     }
 
     [Fact]
-    public void The_frame_step_keys_are_inert_while_a_rectangle_is_being_placed()
+    public void The_frame_step_keys_are_inert_while_a_crop_is_being_placed()
     {
-        // The same physical keys must not move the playhead out from under a crop box.
+        // A crop covers the range the marks named, and the playhead has nothing to do with
+        // it — stepping there would move the picture out from under a box that was not going
+        // to follow it.
         Assert.Equal(EditorIntent.None, KeyMap.Resolve(EditorKey.Comma, EditorModifiers.None, EditorMode.Crop));
-        Assert.Equal(EditorIntent.None, KeyMap.Resolve(EditorKey.Period, EditorModifiers.None, EditorMode.Overlay));
+        Assert.Equal(EditorIntent.None, KeyMap.Resolve(EditorKey.Period, EditorModifiers.None, EditorMode.Crop));
+    }
+
+    [Fact]
+    public void The_frame_step_keys_aim_the_clip_while_an_overlay_is_being_placed()
+    {
+        // The opposite of the crop case, and for the opposite reason: an overlay being placed
+        // starts at the playhead and follows it, so these are the keys that move the clip.
+        Assert.Equal(EditorIntent.StepBack, KeyMap.Resolve(EditorKey.Comma, EditorModifiers.None, EditorMode.Overlay));
+        Assert.Equal(EditorIntent.StepForward, KeyMap.Resolve(EditorKey.Period, EditorModifiers.None, EditorMode.Overlay));
+    }
+
+    [Fact]
+    public void The_overlay_source_card_binds_its_own_digits_and_nothing_else()
+    {
+        Assert.Equal(
+            EditorIntent.ChooseOverlayMarkedRange,
+            KeyMap.Resolve(EditorKey.D1, EditorModifiers.None, EditorMode.OverlaySource));
+        Assert.Equal(
+            EditorIntent.ChooseOverlaySegment,
+            KeyMap.Resolve(EditorKey.D2, EditorModifiers.None, EditorMode.OverlaySource));
+        Assert.Equal(
+            EditorIntent.ChooseOverlayFile,
+            KeyMap.Resolve(EditorKey.D3, EditorModifiers.None, EditorMode.OverlaySource));
+        Assert.Equal(
+            EditorIntent.Cancel,
+            KeyMap.Resolve(EditorKey.Escape, EditorModifiers.None, EditorMode.OverlaySource));
+
+        // Nothing that edits the document reaches through the card. A ripple delete fired at
+        // a question about which clip to overlay would be answering something else entirely.
+        Assert.Equal(EditorIntent.None, KeyMap.Resolve(EditorKey.X, EditorModifiers.None, EditorMode.OverlaySource));
+        Assert.Equal(EditorIntent.None, KeyMap.Resolve(EditorKey.Space, EditorModifiers.None, EditorMode.OverlaySource));
+    }
+
+    [Fact]
+    public void The_cards_keys_are_filed_apart_from_the_ones_that_move_a_box()
+    {
+        // They choose a clip rather than move anything, and listing them under a heading
+        // about rectangles would file them where nobody looking for them would read.
+        var card = KeyMap.Bindings.Where(b => b.Mode == EditorMode.OverlaySource);
+
+        Assert.NotEmpty(card);
+        Assert.All(card, b => Assert.Equal("Overlay what", KeyMap.Category(b)));
+
+        var placement = KeyMap.Bindings.Where(b => b.Mode is EditorMode.Crop or EditorMode.Overlay);
+        Assert.All(placement, b => Assert.Equal("Place a box", KeyMap.Category(b)));
+    }
+
+    [Fact]
+    public void Sliding_a_pending_overlays_content_is_no_longer_bound()
+    {
+        // Its content is what the user chose on the card, and aiming the clip must not
+        // quietly change what is in it.
+        Assert.Equal(EditorIntent.None, KeyMap.Resolve(EditorKey.Left, EditorModifiers.Alt, EditorMode.Overlay));
+        Assert.Equal(EditorIntent.None, KeyMap.Resolve(EditorKey.Right, EditorModifiers.Alt, EditorMode.Overlay));
     }
 
     [Fact]

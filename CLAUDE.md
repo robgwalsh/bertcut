@@ -36,6 +36,14 @@ Three things are worth knowing before touching any of it:
   highest peak returns the useless one every time. See the class remarks on
   `BertCut.Core.Audio.AudioSync`, and the pair of tests in `AudioSyncTests` that hold both
   halves of it in place.
+- **Sync runs in two directions, and `BertCut.Media.Audio.OverlaySync` is the seam.** Which of
+  the two things moves depends on which is still free. `Solve` is for a *committed* clip: it is
+  where the user put it, so the free variable is which of its source's frames it reads.
+  `SolveTimelinePosition` is for one being *placed*: its content is what the user just chose on
+  the card, so what moves is the clip, along the timeline. Reference and candidate simply swap,
+  and both go through the same private `Correlate` — one copy, so the identity exclusion cannot
+  be fixed in one direction and forgotten in the other. Only the second can fail with
+  `MatchNotOnTimeline`, which means the sound was found on footage that has been cut away.
 
 `AudioPeaksCache` keeps a 100 Hz min/max envelope per source under the state root's `cache`
 directory, keyed by content key exactly as the filmstrip is. It feeds both the waveform lane
@@ -55,7 +63,9 @@ because the answer is an edit.
   selecting a segment survives a shaky hand. With a single segment there is nothing to
   reorder and the drag simply ends.
 - **The green band** along the bottom of the track is an overlay clip: body moves it, either
-  end trims it. The band takes the press before the segment under it.
+  end trims it. The band takes the press before the segment under it. A faint band in the same
+  lane is an overlay being placed — the span `Enter` would commit. It starts at the playhead and
+  follows it, so aiming a clip is just moving the playhead, by key or by the ruler.
 
 One lane for time, one for clips, and no exceptions in either direction — a track that seeked
 when it happened to have nothing to select would be a rule you could only learn by tripping
@@ -74,6 +84,38 @@ Selections are indices, and `OnDocumentChanged` drops them on every edit — an 
 nothing against a document that has been renumbered. The two drags are the exception: they
 keep their own index in step with what they are rewriting, which is also why they are the
 only callers allowed to survive a change.
+
+## Placing an overlay
+
+Two questions, deliberately separated, because one keypress used to answer both silently.
+
+**What** is answered by a card — `EditorMode.OverlaySource`, a mode rather than a panel that
+swallows keystrokes, so its digits resolve through the key map like every other key and a
+scripted run presses them exactly as a user does. Three choices, all of which collapse to the
+same `OverlayContent` — which source, from which of its frames, for how long — after which the
+kind is forgotten. The arithmetic is `BertCut.Core.Edits.OverlayPlacement`, in Core so it is
+testable without a window.
+
+**Where** is answered by the playhead. `PendingRange` is a function of it, recomputed in the
+`Playhead` setter, so moving the playhead by any means — a key, the ruler, an audio sync —
+carries the clip and its ghost band along. Two rules follow:
+
+- **The content never changes while the clip is being aimed.** It is what the user chose. This
+  is why `Alt+←/→` is no longer bound in overlay mode, and why a sync during placement moves the
+  clip rather than sliding its in-point.
+- **A clip stops against what is in the way rather than being cut down by it.** The length was
+  settled by the choice, and a clip that quietly came out shorter would break that promise.
+  Truncation survives only for a gap smaller than the content, where no position fits. The
+  payoff is that this path can never overlap an existing clip, so `AddOverlay`'s truncation of
+  its neighbours cannot fire from here — a hazard removed by construction rather than by a
+  special case. `OverlayPlacementTests` pins both as properties over every playhead position.
+
+Marks name *what*, never *where*. A leftover mark cannot drag a placement away from where the
+user is looking, because the placement always starts at the playhead. They are not spent on
+commit either: a crop *is* the range they named, but an overlay only borrowed them.
+
+`IsPlacing` asks for `Crop or Overlay` by name rather than "not Normal" — `RectEditor` watches
+it, and a box appearing behind the card would answer a question nobody had asked yet.
 
 ## Never launch the GUI
 
@@ -124,6 +166,10 @@ sample-angles <path> [sec]  one clip holding the same event twice: an angle, the
 open|import|append <path>
 key <gesture>               through the live key map:  key I  ·  key Ctrl+Z  ·  key >
 intent <EditorIntent>       straight to the window's dispatch point
+overlay-source range|segment|file <path>|cancel
+                            take a row on the card `P` puts up. range and segment are what
+                            `key 1` and `key 2` do; `file` supplies the answer the file picker
+                            would have given, since that dialog belongs to the desktop
 select-overlay <frame>      press and release on that overlay's band in the strip
 drag-overlay <from> <to>    press on the band at <from> and drag until the grabbed point is
                             over <to>, in steps, as a mouse would
@@ -134,18 +180,24 @@ scrub <frame>               click the ruler above the track — seeks, and desel
 goto <frame> | play | stop | tick [n] | sleep <ms> | reset | close | settle [ms]
 shot <name> [element]       PNG of the window, or of any x:Name'd element
 dump-preview <name>.png     the composited video frame alone, no interface
-state                       one JSON line: playhead, duration, marks, mode, crops, overlays,
-                            segments, selectedSegment, overlaySourceStart, selectedOverlay,
-                            overlayStart, overlayEnd, muted, status
+state                       one JSON line: playhead, duration, marks, mode, hasMedia, crops,
+                            overlays, segments, selectedSegment, overlaySourceStart,
+                            selectedOverlay, overlayStart, overlayEnd, overlayLength, muted,
+                            canUndo, status
 assert-status <substring> | assert-timecode <text> | assert-frame <n>
+assert-mode Normal|Crop|Overlay|OverlaySource   the card is a mode, and this is what says
+                                                a choice has been taken
 assert-frame-between <a> <b> | assert-visible <Name> | assert-hidden <Name>
 assert-overlay-source-start <a> [b]   where the overlay in question reads from
 assert-overlay-start <a> [b] | assert-overlay-end <a> [b]
                                       what it covers on the timeline. "The overlay in
-                                      question" is the selected one, else the one under the
-                                      playhead — a trim moves a clip out from under it.
+                                      question" is the one being placed, else the selected
+                                      one, else the one under the playhead — a trim moves a
+                                      clip out from under it.
 assert-overlay-selected [index] | assert-no-overlay-selected | assert-overlays <n>
 assert-segment-selected [index] | assert-no-segment-selected | assert-segments <n>
+assert-marks <in> <out> | assert-no-marks    an overlay of the marked range borrows the marks
+                                             without spending them, and nothing else shows it
 assert-muted | assert-unmuted
 assert-has-media | assert-no-media | assert-unlocked <path>   (exclusive open, so it
                                                                really tests the handle)

@@ -65,13 +65,14 @@ assert-segment-selected 0
 assert-segments 3
 assert-frame 150
 
-# One selection at a time. Placing an overlay over the first segment and clicking its band
-# lets go of the segment.
+# One selection at a time. Overlaying the selected segment onto the head of the timeline and
+# clicking its band lets go of the segment.
+#
+# The segment is both what is picked out and what is being overlaid, which is the whole of
+# choice 2: its own length is the clip's length, so there is nothing to trim afterwards.
 goto 0
-key I
-goto 60
-key O
 key P
+overlay-source segment
 key Enter
 goto 30
 select-overlay 30

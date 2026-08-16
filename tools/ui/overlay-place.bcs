@@ -1,0 +1,192 @@
+# Placing an overlay: saying what it is, then saying where it goes.
+#
+# Two questions, deliberately separated. The card answers the first and settles the clip's
+# length; the playhead answers the second, and the faint band on the strip follows it. The
+# captures are half the point — assert-overlay-start says where the pending range is, but only
+# the shot says whether the strip agrees.
+
+sample clip.mp4 6
+open clip.mp4
+
+# P asks rather than places. Nothing has been chosen yet, so there is no band and no box.
+goto 60
+key P
+assert-mode OverlaySource
+assert-visible OverlaySourceOverlay
+assert-status Overlay what
+shot 01-card
+
+# Both of the first two rows are unavailable here: nothing is marked and nothing is selected.
+# They are dimmed rather than missing, so the digits printed on the rows keep meaning what
+# they say however the editor happens to be sitting.
+overlay-source range
+assert-status Nothing marked
+assert-mode OverlaySource
+
+overlay-source segment
+assert-status No segment selected
+assert-mode OverlaySource
+
+# Backing out spends nothing.
+overlay-source cancel
+assert-mode Normal
+assert-hidden OverlaySourceOverlay
+assert-overlays 0
+
+# ---- 1: the marked range -------------------------------------------------------------
+#
+# Marks say *what* to overlay, never where it goes. A range marked at 120-170 is sixty frames
+# of picture; pressing P at 30 puts those sixty frames at 30, not at 120. Getting this wrong in
+# the other direction — letting a leftover mark drag the placement away from where the user was
+# looking — is a rule you could only learn by losing an overlay to it.
+goto 120
+key I
+goto 170
+key O
+goto 30
+
+key P
+overlay-source range
+assert-mode Overlay
+assert-hidden OverlaySourceOverlay
+assert-overlay-source-start 120
+assert-overlay-start 30
+assert-overlay-end 80
+shot 02-pending
+shot 03-pending-strip Timeline
+
+# Moving the playhead moves the clip, and never what is inside it. Both by key and by mouse:
+# the ruler is a lane that still scrubs while a clip is being aimed.
+key .
+assert-overlay-start 31
+assert-overlay-end 81
+assert-overlay-source-start 120
+
+scrub 100
+assert-overlay-start 100
+assert-overlay-end 150
+assert-overlay-source-start 120
+shot 04-aimed
+
+# What the faint band promised is what Enter places.
+key Enter
+assert-mode Normal
+assert-overlays 1
+assert-overlay-start 100
+assert-overlay-end 150
+shot 05-placed
+
+# And the marks it borrowed are still there to be spent on something else.
+assert-marks 120 170
+key Escape
+assert-no-marks
+
+key Ctrl+Z
+assert-overlays 0
+
+# ---- 2: a base segment ---------------------------------------------------------------
+#
+# Cut the timeline into three and overlay the middle one. A segment is already a run of source
+# frames with a length in timeline frames, so this is the choice with nothing to convert.
+goto 60
+key S
+goto 120
+key S
+assert-segments 3
+
+select-segment 90
+assert-segment-selected 1
+
+goto 0
+key P
+overlay-source segment
+assert-overlay-source-start 60
+assert-overlay-start 0
+assert-overlay-end 60
+state
+shot 06-segment
+
+key Enter
+assert-overlays 1
+key Ctrl+Z
+assert-overlays 0
+
+# ---- where a clip that will not fit goes ----------------------------------------------
+#
+# It stops against what is in the way rather than being cut down by it. The length was settled
+# when the content was chosen, and a clip that quietly came out shorter because the playhead
+# happened to be near the end would break the promise the card just made.
+reset
+open clip.mp4
+
+goto 100
+key I
+goto 160
+key O
+goto 0
+
+# Against the end of the timeline: 180 frames of timeline, 60 of clip, asked for at 150.
+key P
+overlay-source range
+goto 150
+assert-overlay-start 120
+assert-overlay-end 180
+shot 07-clamped-to-end
+key Escape
+
+# Against another clip. Place one at 120 first, then ask for a second one from 100: it lands
+# flush behind rather than eating sixty frames of its neighbour.
+key P
+overlay-source range
+goto 120
+key Enter
+assert-overlays 1
+
+goto 100
+key P
+overlay-source range
+assert-overlay-start 60
+assert-overlay-end 120
+shot 08-clamped-to-neighbour
+key Enter
+assert-overlays 2
+
+# Both clips are intact: clamping is what stops a placement truncating what it lands on.
+goto 70
+assert-overlay-start 60
+assert-overlay-end 120
+goto 140
+assert-overlay-start 120
+assert-overlay-end 180
+state
+
+# And where there is genuinely nowhere to put it, it says so rather than entering a placement
+# that could not be committed. The playhead is on a clip that runs to the end of the timeline,
+# so there is no room after it — which is the direction landing on a clip sends the new one.
+goto 130
+key P
+overlay-source range
+assert-status No room for it here
+assert-mode Normal
+assert-overlays 2
+
+# ---- 3: a whole file ------------------------------------------------------------------
+#
+# The row that opens a file picker. The picker itself is the one step a scripted run cannot
+# take — a common dialog belongs to the desktop and would appear on the user's real screen —
+# so the harness supplies the answer it would have given and drives everything after it.
+reset
+open clip.mp4
+sample other.mp4 2
+
+goto 30
+key P
+overlay-source file other.mp4
+assert-mode Overlay
+assert-overlay-source-start 0
+assert-overlay-start 30
+assert-overlay-end 90
+shot 09-file
+key Enter
+assert-overlays 1
+state

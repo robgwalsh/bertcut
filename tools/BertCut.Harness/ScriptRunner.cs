@@ -38,6 +38,7 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
         [EditorIntent.OpenFile] = "open <path>",
         [EditorIntent.ImportSource] = "import <path>",
         [EditorIntent.AppendSource] = "append <path>",
+        [EditorIntent.ChooseOverlayFile] = "overlay-source file <path>",
         [EditorIntent.Export] = "export is not driven by the harness; EndToEndExportTests covers it headlessly",
     };
 
@@ -92,6 +93,7 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
 
             case "key": Key(rest); break;
             case "intent": Intent(rest); break;
+            case "overlay-source": OverlaySource(rest); break;
 
             case "select-overlay": SelectOverlay(rest); break;
             case "drag-overlay": DragOverlay(rest); break;
@@ -114,6 +116,7 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
             case "state": output.WriteLine("STATE " + State()); break;
 
             case "assert-status": AssertStatus(rest); break;
+            case "assert-mode": AssertMode(rest); break;
             case "assert-timecode": AssertTimecode(rest); break;
             case "assert-frame": AssertFrame(rest); break;
             case "assert-frame-between": AssertFrameBetween(rest); break;
@@ -123,6 +126,8 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
             case "assert-overlay-start": AssertOverlayStart(rest); break;
             case "assert-overlay-end": AssertOverlayEnd(rest); break;
             case "assert-overlays": AssertOverlays(rest); break;
+            case "assert-marks": AssertMarks(rest); break;
+            case "assert-no-marks": AssertMarks(""); break;
             case "assert-segments": AssertSegments(rest); break;
             case "assert-segment-selected": AssertSegmentSelected(rest); break;
             case "assert-no-segment-selected": AssertNoSegmentSelected(); break;
@@ -199,6 +204,49 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
 
         if (intent == EditorIntent.None)
             throw new AssertionException($"'{rest}' is not bound to anything in {session.Model.Mode} mode.");
+
+        session.Settle();
+    }
+
+    /// <summary>
+    /// Takes one of the three rows on the overlay source card.
+    /// </summary>
+    /// <remarks>
+    /// <c>range</c> and <c>segment</c> are what <c>key 1</c> and <c>key 2</c> do and are here
+    /// only to read as what they are. <c>file</c> is the one that needs its own verb: the row
+    /// opens a common file dialog, which belongs to the desktop and would appear on the user's
+    /// screen wherever this window is parked — so the harness supplies the answer the picker
+    /// would have given and drives everything after it, exactly as <c>import</c> does.
+    /// </remarks>
+    private void OverlaySource(string rest)
+    {
+        var (which, tail) = Split(Require(rest, "overlay-source"));
+
+        switch (which.ToLowerInvariant())
+        {
+            case "range":
+                session.Dispatch(EditorIntent.ChooseOverlayMarkedRange);
+                break;
+
+            case "segment":
+                session.Dispatch(EditorIntent.ChooseOverlaySegment);
+                break;
+
+            case "cancel":
+                session.Dispatch(EditorIntent.Cancel);
+                break;
+
+            case "file":
+                var path = Resolve(Require(tail, "overlay-source file"));
+                if (!File.Exists(path)) throw new FileNotFoundException($"No file at '{path}'.", path);
+
+                session.Dispatcher.Invoke(() => _ = session.Model.ImportAndOverlayAsync(path));
+                break;
+
+            default:
+                throw new FormatException(
+                    $"'{which}' is not an overlay source. Use range, segment, file <path>, or cancel.");
+        }
 
         session.Settle();
     }
@@ -525,6 +573,11 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
             ("overlayStart", OverlayRange(model) is { } from ? Text(from.Start) : "null"),
             ("overlayEnd", OverlayRange(model) is { } to ? Text(to.End) : "null"),
 
+            // How long the clip being placed is, settled by the choice of content and not by
+            // where it is aimed — the number the clamping exists to protect.
+            ("overlayLength",
+                model.PendingOverlayContent is { } content ? Text(content.LengthFrames) : "null"),
+
             ("muted", model.IsMuted ? "true" : "false"),
             ("canUndo", model.CanUndo ? "true" : "false"),
             ("status", Quote(model.Status)),
@@ -555,13 +608,17 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
     /// What the overlay in question covers on the timeline.
     /// </summary>
     /// <remarks>
-    /// The selected clip first, because a drag is asked about by selecting it and the playhead
-    /// does not follow it along the strip — a trim of the front end moves it out from under
-    /// the playhead as often as not. Otherwise the one under the playhead, which is what every
-    /// other overlay command in this harness means by "the overlay".
+    /// Placement mode first, for the same reason as <see cref="OverlaySourceStart"/> above: the
+    /// span a pending overlay would cover is the one being asked about, and it is not in the
+    /// document yet. Then the selected clip, because a drag is asked about by selecting it and
+    /// the playhead does not follow it along the strip — a trim of the front end moves it out
+    /// from under the playhead as often as not. Otherwise the one under the playhead, which is
+    /// what every other overlay command in this harness means by "the overlay".
     /// </remarks>
     private static FrameRange? OverlayRange(EditorViewModel model) =>
-        (model.SelectedOverlayClip ?? OverlayAtPlayhead(model))?.Range;
+        model.Mode == EditorMode.Overlay
+            ? model.PendingRange
+            : (model.SelectedOverlayClip ?? OverlayAtPlayhead(model))?.Range;
 
     private static OverlayClip? OverlayAtPlayhead(EditorViewModel model)
     {
@@ -584,6 +641,22 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
 
         if (!actual.Contains(expected, StringComparison.OrdinalIgnoreCase))
             throw new AssertionException($"expected the status to contain '{expected}', got '{actual}'.");
+    }
+
+    /// <summary>
+    /// Which mode the editor is in: Normal, Crop, Overlay, or OverlaySource.
+    /// </summary>
+    /// <remarks>
+    /// The source card is a mode, so this is what says it is up — and, more usefully, what
+    /// says a choice has been taken and the clip is now being aimed.
+    /// </remarks>
+    private void AssertMode(string rest)
+    {
+        var expected = Require(rest, "assert-mode");
+        var actual = session.Dispatcher.Invoke(() => session.Model.Mode).ToString();
+
+        if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+            throw new AssertionException($"expected {expected} mode, got {actual}.");
     }
 
     private void AssertTimecode(string rest)
@@ -682,6 +755,38 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
 
         if (actual != expected)
             throw new AssertionException($"expected {expected} overlays, got {actual}.");
+    }
+
+    /// <summary>
+    /// Where the in and out marks are, or that there are none.
+    /// </summary>
+    /// <remarks>
+    /// Marks are worth asserting on their own because placing an overlay deliberately leaves
+    /// them alone — it neither reads them nor spends them — and nothing else about the
+    /// document would show it if that stopped being true.
+    /// </remarks>
+    private void AssertMarks(string rest)
+    {
+        var (markIn, markOut) = session.Dispatcher.Invoke(
+            () => (session.Model.MarkIn, session.Model.MarkOut));
+
+        if (rest.Length == 0)
+        {
+            if (markIn is not null || markOut is not null)
+                throw new AssertionException($"expected no marks, got in {markIn}, out {markOut}.");
+
+            return;
+        }
+
+        var parts = rest.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2) throw new AssertionException("assert-marks needs an in and an out.");
+
+        var expectedIn = Number(parts[0], "assert-marks");
+        var expectedOut = Number(parts[1], "assert-marks");
+
+        if (markIn != expectedIn || markOut != expectedOut)
+            throw new AssertionException(
+                $"expected marks in {expectedIn}, out {expectedOut}, got in {markIn}, out {markOut}.");
     }
 
     private void AssertSegments(string rest)

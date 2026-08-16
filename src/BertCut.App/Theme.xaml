@@ -50,6 +50,41 @@
         <Setter Property="Margin" Value="0,0,10,10" />
     </Style>
 
+    <!-- One row of the overlay source card: a card you can press, and that dims rather than
+         disappearing when it has nothing to offer. A row that vanished when nothing was
+         marked would make the card a different shape every time it opened, and the digits
+         printed on the rows would stop meaning what they say. -->
+    <Style x:Key="OverlayChoice" TargetType="Button">
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="Cursor" Value="Hand" />
+
+        <!-- The keyboard reaches these rows by the digits printed on them, through the key
+             map like everything else. A focusable row would also answer to Space and Enter,
+             which mean other things here. -->
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Margin" Value="0,0,0,8" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Shell" Background="#1A2028" BorderBrush="#272F3A"
+                            BorderThickness="1" CornerRadius="10" Padding="16">
+                        <ContentPresenter />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Shell" Property="Background" Value="#212A34" />
+                            <Setter TargetName="Shell" Property="BorderBrush" Value="#3C4A5A" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.38" />
+                            <Setter Property="Cursor" Value="Arrow" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- A keystroke, drawn as a key. Used for every gesture the app prints: the help sheet,
          the Controls page, and every toolbar tooltip. -->
     <Style x:Key="KeyCap" TargetType="ContentControl">

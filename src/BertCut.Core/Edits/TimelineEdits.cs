@@ -354,12 +354,18 @@ public static class TimelineEdits
     /// agree with what it will actually be able to show. Both floor, so neither can claim a
     /// frame that is not there.
     /// </remarks>
-    private static long ToOutputFrames(Project p, SourceMedia source, long frames) =>
+    /// <remarks>
+    /// Public because the same question is asked one step earlier, when an overlay is being
+    /// placed: "how long is this clip going to be on the timeline?" is the source's frame
+    /// count through this conversion, and answering it with raw arithmetic would put the
+    /// ghost band and the trim limits on different rates.
+    /// </remarks>
+    public static long ToOutputFrames(Project p, SourceMedia source, long frames) =>
         source.FrameRate.EquivalentTo(p.Output.FrameRate)
             ? frames
             : RationalMath.RescaleFloor(frames, source.FrameRate.Inverse, p.Output.FrameRate.Inverse);
 
-    private static long ToSourceFrames(Project p, SourceMedia source, long frames) =>
+    public static long ToSourceFrames(Project p, SourceMedia source, long frames) =>
         source.FrameRate.EquivalentTo(p.Output.FrameRate)
             ? frames
             : RationalMath.RescaleFloor(frames, p.Output.FrameRate.Inverse, source.FrameRate.Inverse);

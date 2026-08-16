@@ -129,6 +129,7 @@ public partial class MainWindow : Window
         {
             case EditorIntent.OpenFile: OpenFile(); break;
             case EditorIntent.ImportSource: ImportFile(); break;
+            case EditorIntent.ChooseOverlayFile: ChooseOverlayFile(); break;
             case EditorIntent.AppendSource: AppendFile(); break;
             case EditorIntent.Export: _ = ExportAsync(); break;
             case EditorIntent.ToggleHelp: ToggleHelp(); break;
@@ -201,6 +202,20 @@ public partial class MainWindow : Window
         };
 
         if (dialog.ShowDialog(this) == true) _ = _model.ImportAsync(dialog.FileName);
+    }
+
+    /// <summary>The overlay source card's third row: a file, brought in and placed whole.</summary>
+    private void ChooseOverlayFile()
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Choose a video to overlay",
+            Filter = "Video files|*.mp4;*.mkv;*.mov;*.avi;*.webm;*.m4v|All files|*.*",
+        };
+
+        // Backing out of the picker leaves the card up rather than abandoning the overlay:
+        // the user answered "not that file", not "never mind".
+        if (dialog.ShowDialog(this) == true) _ = _model.ImportAndOverlayAsync(dialog.FileName);
     }
 
     /// <summary>
@@ -351,6 +366,66 @@ public partial class MainWindow : Window
         Keyboard.Focus(this);
     }
 
+    // ---- the overlay source card -------------------------------------------------------
+
+    /// <summary>
+    /// Puts the card up or down to match the mode, and says what each row would take.
+    /// </summary>
+    /// <remarks>
+    /// Driven from the model's mode rather than called at the point <c>P</c> is pressed, so
+    /// the card cannot be left up by a path that changes the mode some other way — a cancel,
+    /// a commit, or the editor being closed out from under it.
+    /// </remarks>
+    private void SyncOverlaySourceCard()
+    {
+        var wanted = _model.IsChoosingOverlaySource;
+        var showing = OverlaySourceOverlay.Visibility == Visibility.Visible;
+
+        if (wanted == showing) return;
+
+        if (!wanted)
+        {
+            OverlaySourceOverlay.Visibility = Visibility.Collapsed;
+            Keyboard.Focus(this);
+            return;
+        }
+
+        // A row that cannot be taken is dimmed and says why, rather than failing at the
+        // moment it is pressed: what is on offer is the whole question the card is asking.
+        var range = _model.SelectedRange;
+        OverlaySourceRange.IsEnabled = range is not null;
+        OverlaySourceRangeDetail.Text = range is { } marked
+            ? $"{marked.Length} frames of the base video, from where it is marked."
+            : "Nothing is marked — press I and O on the timeline first.";
+
+        var segment = _model.SelectedSegment;
+        OverlaySourceSegment.IsEnabled = segment is not null;
+        OverlaySourceSegmentDetail.Text = segment is { } index
+            ? $"{_model.Project.Base[index].LengthFrames} frames — segment {index + 1} of "
+              + $"{_model.Project.Base.Length}, whole."
+            : "No segment selected — click one on the track first.";
+
+        HideHelp();
+        HideSettings();
+        OverlaySourceOverlay.Visibility = Visibility.Visible;
+
+        if (TryFindResource("OverlaySourceIn") is Storyboard entrance) entrance.Begin(this);
+    }
+
+    /// <summary>Backing out by clicking the dimmed area, as the other two panels do.</summary>
+    private void OnOverlaySourceBackdropClick(object sender, MouseButtonEventArgs e)
+    {
+        if (ReferenceEquals(e.OriginalSource, OverlaySourceOverlay)) Invoke(EditorIntent.Cancel);
+    }
+
+    /// <summary>
+    /// A row pressed with the mouse, which is the same thing as the digit printed on it.
+    /// </summary>
+    private void OnOverlaySourceClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: EditorIntent intent }) Invoke(intent);
+    }
+
     // ---- the restore notice ------------------------------------------------------------
 
     /// <summary>
@@ -451,6 +526,9 @@ public partial class MainWindow : Window
         Settings.BeginAnimation(OpacityProperty, null);
         Lift(Settings).BeginAnimation(TranslateTransform.YProperty, null);
 
+        OverlaySourceCard.BeginAnimation(OpacityProperty, null);
+        Lift(OverlaySourceCard).BeginAnimation(TranslateTransform.YProperty, null);
+
         RestoreToast.BeginAnimation(OpacityProperty, null);
         Lift(RestoreToast).BeginAnimation(TranslateTransform.YProperty, null);
     }
@@ -530,7 +608,7 @@ public partial class MainWindow : Window
             + $"{Gesture(EditorIntent.MarkIn)} / {Gesture(EditorIntent.MarkOut)} mark in and out · "
             + $"{Gesture(EditorIntent.RippleDelete)} ripples the marked range away\n"
             + $"{Gesture(EditorIntent.BeginCrop)} crops the marked range · "
-            + $"{Gesture(EditorIntent.BeginOverlay)} overlays a clip on it\n"
+            + $"{Gesture(EditorIntent.BeginOverlay)} overlays a clip\n"
             + $"{Gesture(EditorIntent.PlayPause)} plays · "
             + $"{Gesture(EditorIntent.StepBack)} {Gesture(EditorIntent.StepForward)} step a frame · "
             + $"{Gesture(EditorIntent.Undo)} undoes\n"
@@ -703,6 +781,8 @@ public partial class MainWindow : Window
         if (e.PropertyName is nameof(EditorViewModel.IsMuted)) ApplyMuteGlyph();
 
         if (e.PropertyName is nameof(EditorViewModel.Status)) StatusLabel.Text = _model.Status;
+
+        if (e.PropertyName is nameof(EditorViewModel.Mode)) SyncOverlaySourceCard();
     }
 
     /// <summary>

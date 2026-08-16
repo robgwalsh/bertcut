@@ -39,6 +39,19 @@
                 </DoubleAnimation.EasingFunction>
             </DoubleAnimation>
         </Storyboard>
+
+        <Storyboard x:Key="OverlaySourceIn">
+            <DoubleAnimation Storyboard.TargetName="OverlaySourceCard"
+                             Storyboard.TargetProperty="Opacity"
+                             From="0" To="1" Duration="0:0:0.16" />
+            <DoubleAnimation Storyboard.TargetName="OverlaySourceCard"
+                             Storyboard.TargetProperty="RenderTransform.(TranslateTransform.Y)"
+                             From="18" To="0" Duration="0:0:0.26">
+                <DoubleAnimation.EasingFunction>
+                    <CubicEase EasingMode="EaseOut" />
+                </DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+        </Storyboard>
     </Window.Resources>
 
     <Grid>
@@ -158,7 +171,7 @@
                             Tag="{x:Static input:EditorIntent.BeginOverlay}"
                             Foreground="#6DD48B"
                             AutomationProperties.Name="Overlay a clip"
-                            AutomationProperties.HelpText="Picture-in-picture over the marked range." />
+                            AutomationProperties.HelpText="Picture-in-picture — asks what to overlay, then you aim it with the playhead." />
 
                     <Border Style="{StaticResource Divider}" />
 
@@ -575,7 +588,7 @@
                                         </StackPanel>
                                         <TextBlock Text="Overlay a clip" Style="{StaticResource CardTitle}" />
                                         <TextBlock Style="{StaticResource CardBody}"
-                                                   Text="Picture-in-picture over the marked range. Ctrl+I imports a webcam take to use; with nothing imported, P puts the video on top of itself as a zoomed inset. A lines the overlay up with the base track by its sound — for the same event filmed twice, that is the whole job. Afterwards it is the green band on the timeline — see below for what you can do to it there." />
+                                                   Text="P asks what to overlay: the marked range, the segment you have selected, or a video file taken whole. That settles the clip and its length. Then move the playhead — the faint band on the strip is where it would land, and A puts it where the sound matches the base track, which for the same event filmed twice is the whole job. Enter places it, and it becomes the green band on the timeline — see below for what you can do to it there." />
                                     </StackPanel>
                                 </Border>
                             </UniformGrid>
@@ -865,6 +878,92 @@
                     <TranslateTransform />
                 </local:SettingsView.RenderTransform>
             </local:SettingsView>
+        </Border>
+
+        <!-- What to overlay, asked before where it goes. Placing a clip used to be one
+             keypress that took its content from whichever file had been imported last and
+             its length from however much of that file was left — neither ever stated, so the
+             only way to learn what you were about to get was to press the key and look at
+             what arrived. Three rows, and each says what it will take. -->
+        <Border x:Name="OverlaySourceOverlay"
+                Grid.RowSpan="5"
+                Background="#F00A0C10"
+                Visibility="Collapsed"
+                MouseLeftButtonDown="OnOverlaySourceBackdropClick">
+
+            <Border x:Name="OverlaySourceCard"
+                    MaxWidth="620" Margin="28" Padding="30,26,30,24"
+                    VerticalAlignment="Center" HorizontalAlignment="Center"
+                    CornerRadius="14" BorderBrush="#2E3846" BorderThickness="1">
+                <Border.RenderTransform>
+                    <TranslateTransform />
+                </Border.RenderTransform>
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="0.7,1">
+                        <GradientStop Color="#1D242E" Offset="0" />
+                        <GradientStop Color="#12161C" Offset="1" />
+                    </LinearGradientBrush>
+                </Border.Background>
+
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                        <Ellipse Width="11" Height="11" Fill="#6DD48B" VerticalAlignment="Center"
+                                 Margin="0,0,11,0" />
+                        <TextBlock Text="Overlay what?" FontSize="23" FontWeight="Bold"
+                                   Foreground="#F3F7FC" />
+                    </StackPanel>
+                    <TextBlock Text="Pick the clip. You choose where it goes next, by moving the playhead."
+                               FontSize="13" Foreground="#8794A5" Margin="22,0,0,18" />
+
+                    <!-- Each row is a button so the mouse and the digit printed on it reach
+                         the same code, and a row that cannot be taken says why rather than
+                         going quiet. -->
+                    <Button x:Name="OverlaySourceRange" Style="{StaticResource OverlayChoice}"
+                            Tag="{x:Static input:EditorIntent.ChooseOverlayMarkedRange}"
+                            Click="OnOverlaySourceClick">
+                        <StackPanel Orientation="Horizontal">
+                            <ContentControl Style="{StaticResource KeyCap}" Content="1"
+                                            VerticalAlignment="Center" Margin="0,0,14,0" />
+                            <StackPanel>
+                                <TextBlock Text="The marked range" Style="{StaticResource CardTitle}" />
+                                <TextBlock x:Name="OverlaySourceRangeDetail"
+                                           Style="{StaticResource CardBody}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Button>
+
+                    <Button x:Name="OverlaySourceSegment" Style="{StaticResource OverlayChoice}"
+                            Tag="{x:Static input:EditorIntent.ChooseOverlaySegment}"
+                            Click="OnOverlaySourceClick">
+                        <StackPanel Orientation="Horizontal">
+                            <ContentControl Style="{StaticResource KeyCap}" Content="2"
+                                            VerticalAlignment="Center" Margin="0,0,14,0" />
+                            <StackPanel>
+                                <TextBlock Text="The selected segment" Style="{StaticResource CardTitle}" />
+                                <TextBlock x:Name="OverlaySourceSegmentDetail"
+                                           Style="{StaticResource CardBody}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Button>
+
+                    <Button x:Name="OverlaySourceFile" Style="{StaticResource OverlayChoice}"
+                            Tag="{x:Static input:EditorIntent.ChooseOverlayFile}"
+                            Click="OnOverlaySourceClick">
+                        <StackPanel Orientation="Horizontal">
+                            <ContentControl Style="{StaticResource KeyCap}" Content="3"
+                                            VerticalAlignment="Center" Margin="0,0,14,0" />
+                            <StackPanel>
+                                <TextBlock Text="A video file" Style="{StaticResource CardTitle}" />
+                                <TextBlock Text="Choose a file and overlay the whole of it — a second camera's take."
+                                           Style="{StaticResource CardBody}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Button>
+
+                    <TextBlock Text="Esc cancels" FontSize="12" Foreground="#6B7787"
+                               HorizontalAlignment="Center" Margin="0,14,0,0" />
+                </StackPanel>
+            </Border>
         </Border>
     </Grid>
 </Window>

@@ -4,6 +4,10 @@
 # The fixture is one recording holding the same event from two angles played back to back —
 # the shape this feature exists for. The first six seconds are the first angle; the second
 # six are the same event again, quieter and with its own noise.
+#
+# Which of the two things moves depends on which is still free. A clip being placed has content
+# the user just chose, so what moves is the clip. A committed clip is where they put it, so what
+# moves is which of its source's frames it reads. Both halves are below.
 
 sample-angles angles.mp4 6
 open angles.mp4
@@ -14,33 +18,56 @@ assert-has-media
 settle 1500
 shot 01-waveform
 
-# Mark half a second to five and a half seconds of the first angle: frames 15 to 165.
-goto 15
+# ---- placing: the clip moves ----------------------------------------------------------
+#
+# Mark the second angle — source frames 195 to 345 — and overlay it. That is a real range of a
+# real recording, and the card takes its length from the marks: 150 frames, whatever happens
+# next.
+goto 195
 key I
-goto 165
+goto 345
 key O
-shot 02-marked
 
-# Place the overlay. It comes from the same file, so it starts life showing the very frames
-# it is sitting on top of — source frame 15, the identity match the correlation has to refuse.
+# Aim it somewhere plainly wrong, so that landing in the right place cannot be luck.
+goto 40
 key P
-assert-overlay-source-start 15
-shot 03-placed
+overlay-source range
+assert-mode Overlay
+assert-overlay-source-start 195
+assert-overlay-start 40
+assert-overlay-end 190
+shot 02-aimed-wrong
 
-# Sync. The same instant of the second angle is six seconds later, which at 30 fps is source
-# frame 195. Bounded rather than exact: the answer is good to about a frame.
+# Sync. The same instant of the first angle is six seconds earlier, so the clip belongs at
+# timeline frame 15. Bounded rather than exact: the answer is good to about a frame.
 key A
 assert-status Synced
-assert-overlay-source-start 193 197
-shot 04-synced
+assert-overlay-start 13 17
+assert-overlay-source-start 195
+shot 03-synced
 
-# Running it again must not walk the overlay somewhere else that matches equally well.
+# The playhead came with it, so the user is looking at the frame the match was made against
+# rather than at wherever they left it.
+assert-frame-between 13 17
+
+# Running it again must not walk the clip somewhere else that matches equally well.
 key A
-assert-overlay-source-start 193 197
+assert-overlay-start 13 17
 
 key Enter
+assert-overlays 1
 goto 90
-shot 05-committed
+shot 04-committed
+state
+
+# ---- committed: the content moves ------------------------------------------------------
+#
+# The other direction, on the clip that is now on the strip. Its own audio is already lined up,
+# so this is the idempotent case: it reports that it is in sync and changes nothing.
+goto 30
+key A
+assert-status sync
+assert-overlays 1
 state
 
 # Muting is monitoring only: it changes what is heard, never the document.

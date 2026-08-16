@@ -43,6 +43,8 @@ csproj**, or the output lands in `bin\Debug\` and you run a stale binary.
 & $harness --script C:\Source\bertcut\tools\ui\smoke.bcs           # the canonical pass
 & $harness --script C:\Source\bertcut\tools\ui\overlay-drag.bcs    # overlay clips, by pointer
 & $harness --script C:\Source\bertcut\tools\ui\segment-drag.bcs    # base segments, by pointer
+& $harness --script C:\Source\bertcut\tools\ui\overlay-place.bcs   # the source card, and aiming
+& $harness --script C:\Source\bertcut\tools\ui\sync.bcs            # audio sync, both directions
 & $harness -c "sample c.mp4 6; open c.mp4; goto 90; shot check"    # ad hoc
 ```
 
@@ -60,6 +62,11 @@ sample-angles <path> [sec]  one clip holding the same event twice, the second ti
 open|import|append <path>
 key <gesture>               through the live key map:  key I  ·  key Ctrl+Z  ·  key >
 intent <EditorIntent>       straight to the window's single dispatch point
+overlay-source range|segment|file <path>|cancel
+                            take a row on the card `P` puts up. `range` and `segment` are what
+                            `key 1` and `key 2` do; `file` supplies the answer the file picker
+                            would have given, because that dialog belongs to the desktop and
+                            would appear on the user's real screen
 select-overlay <frame>      press and release on that overlay's band in the timeline strip
 drag-overlay <from> <to>    press on the band at <from> and drag until the grabbed point is
                             over <to> — through the control's own hit test, in steps, as a
@@ -77,22 +84,33 @@ shot <name> [element]       PNG of the window, or of any x:Name'd element
 dump-preview <name>.png     the composited video frame alone, no interface around it
 state                       one JSON line of everything worth asserting on
 assert-status <substring> | assert-timecode <text> | assert-frame <n>
+assert-mode Normal|Crop|Overlay|OverlaySource
+                                      the source card is a mode, so this is what says it is
+                                      up — and what says a choice has been taken
 assert-frame-between <a> <b> | assert-visible <Name> | assert-hidden <Name>
 assert-overlay-source-start <a> [b]   where the overlay in question reads from in its own
-                                      source — what the audio sync moves, and what a trim of
-                                      the front end has to carry with it
+                                      source. A trim of the front end carries it; aiming a
+                                      clip being placed must never change it
 assert-overlay-start <a> [b] | assert-overlay-end <a> [b]
                                       what it covers on the timeline
 assert-overlay-selected [index] | assert-no-overlay-selected | assert-overlays <n>
 assert-segment-selected [index] | assert-no-segment-selected | assert-segments <n>
+assert-marks <in> <out> | assert-no-marks
 assert-muted | assert-unmuted
 assert-has-media | assert-no-media | assert-unlocked <path>
 echo <text>                 '#' at the start of a line is a comment
 ```
 
-"The overlay in question" is the selected one, falling back to the one under the playhead.
-Selecting is how you say which clip you mean — trimming a clip's front takes it out from
-under the playhead as often as not.
+"The overlay in question" is the one being placed while the editor is in overlay mode,
+otherwise the selected one, falling back to the one under the playhead. Selecting is how you
+say which clip you mean — trimming a clip's front takes it out from under the playhead as
+often as not.
+
+**Placing an overlay is two steps.** `P` puts up a card asking *what*: the marked range, the
+selected segment, or a video file taken whole. That settles the clip and its length. Then the
+playhead answers *where* — the faint band follows it, `A` puts it where the sound matches, and
+`Enter` commits. So a script that wants an overlay needs `key P` and then a choice; a bare
+`key P` now only opens the card.
 
 **Where a press lands decides what it does.** The ruler above the track and the waveform
 below it are the only lanes that move the playhead; the track selects a base segment; the

@@ -172,6 +172,67 @@ public class OverlaySyncTests : IDisposable
         Assert.Equal(Fps / 2, reader.PositionFrames);
     }
 
+    // ---- the other direction: the content is fixed, and the clip is what moves ----
+
+    [SkippableFact]
+    public async Task A_clip_of_the_second_angle_is_placed_over_the_first()
+    {
+        Skip.If(_runtime is null, "No FFmpeg 8+ build found.");
+
+        var (project, indices) = await TwoAngleProjectAsync("place.mp4");
+
+        // Five seconds of the second angle, taken from source frame 195 — the same instant
+        // frame 15 of the first angle shows. Asked for from entirely the wrong place.
+        var outcome = OverlaySync.SolveTimelinePosition(
+            project, overlaySourceId: 1, overlaySourceStartFrame: 195, lengthFrames: 150,
+            currentTimelineStart: 250, indexOf: id => indices[id], peaksOf: PeaksOf(project));
+
+        Assert.True(outcome.Succeeded, $"placement failed: {outcome.Failure}");
+
+        // The base is uncut, so the timeline frame is the source frame.
+        Assert.InRange(outcome.TimelineStartFrame, 15 - 2, 15 + 2);
+        Assert.True(outcome.Confidence > OverlaySync.MinimumConfidence,
+            $"confidence was {outcome.Confidence:0.000}");
+    }
+
+    [SkippableFact]
+    public async Task Placing_an_already_placed_clip_leaves_it_where_it_is()
+    {
+        Skip.If(_runtime is null, "No FFmpeg 8+ build found.");
+
+        var (project, indices) = await TwoAngleProjectAsync("place-again.mp4");
+
+        var first = OverlaySync.SolveTimelinePosition(
+            project, 1, 195, 150, 250, id => indices[id], PeaksOf(project));
+
+        Assert.True(first.Succeeded, $"first placement failed: {first.Failure}");
+
+        var second = OverlaySync.SolveTimelinePosition(
+            project, 1, 195, 150, first.TimelineStartFrame, id => indices[id], PeaksOf(project));
+
+        Assert.True(second.Succeeded, $"second placement failed: {second.Failure}");
+        Assert.Equal(first.TimelineStartFrame, second.TimelineStartFrame);
+    }
+
+    [SkippableFact]
+    public async Task A_match_on_footage_that_was_cut_away_is_reported_rather_than_rounded()
+    {
+        Skip.If(_runtime is null, "No FFmpeg 8+ build found.");
+
+        var (project, indices) = await TwoAngleProjectAsync("cut-away.mp4");
+
+        // Ripple the first angle out of the timeline. The second angle's content still matches
+        // it in the *file*, but there is nowhere on the timeline left to put the clip — and
+        // snapping to the nearest surviving frame would be confidently wrong by six seconds.
+        var cut = TimelineEdits.RippleDelete(project, new FrameRange(0, AngleSeconds * Fps));
+
+        var outcome = OverlaySync.SolveTimelinePosition(
+            cut, 1, 195, 150, 0, id => indices[id], PeaksOf(cut));
+
+        Assert.False(outcome.Succeeded);
+        Assert.Equal(SyncFailure.MatchNotOnTimeline, outcome.Failure);
+    }
+
     // ---- fixtures -----------------------------------------------------------------
 
     private Func<int, AudioPeaks?> PeaksOf(Project project) => id =>

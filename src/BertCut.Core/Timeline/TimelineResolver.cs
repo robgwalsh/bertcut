@@ -71,16 +71,74 @@ public sealed class TimelineResolver(Project project)
     }
 
     /// <summary>
-    /// Converts an offset in output frames to an offset in source frames.
+    /// Where a source frame shows on the timeline, or null when it shows nowhere.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The inverse of <see cref="Resolve"/>, and the only question the audio sync asks in this
+    /// direction: the correlation answers "this moment of the base recording", and what the
+    /// caller needs is the timeline frame sitting on it.
+    /// </para>
+    /// <para>
+    /// <b>Null is an answer, not a failure.</b> The base track is what survived the cutting, so
+    /// a source frame the user rippled away is genuinely not on the timeline — and a sync that
+    /// snapped to the nearest surviving frame instead would be confidently wrong at a position
+    /// nothing was ever matched against.
+    /// </para>
+    /// <para>
+    /// A moment can also show <i>more than once</i> — a run duplicated on the track, or one
+    /// simply reordered — so the caller says where it believes the answer is and gets the
+    /// nearest of them. That is the same tie-break <c>AudioSync.PreferNear</c> applies one
+    /// level down, for the same reason: of two answers that are equally true, the one that
+    /// moves things least is the one the user meant.
+    /// </para>
+    /// <para>
+    /// A linear scan, and deliberately not hint-cached like <see cref="FindBase"/>: this runs
+    /// once when a key is pressed, never once per displayed frame.
+    /// </para>
+    /// </remarks>
+    /// <param name="near">The timeline frame to break ties toward.</param>
+    public long? TimelineFrameOf(int sourceId, long sourceFrame, long near = 0)
+    {
+        long? best = null;
+
+        foreach (var seg in Project.Base)
+        {
+            if (seg.SourceId != sourceId) continue;
+
+            var source = Project.RequireSource(seg.SourceId);
+            var into = sourceFrame - seg.SourceStartFrame;
+            if (into < 0) continue;
+
+            // How much of the source this segment actually covers, in the source's own frames
+            // — a 60 fps clip on a 30 fps timeline spends two of its frames per output frame.
+            if (into >= ToSourceFrames(seg.LengthFrames, source, Project.Output)) continue;
+
+            var at = seg.TimelineStart + ToOutputFrames(into, source, Project.Output);
+
+            if (best is null || Math.Abs(at - near) < Math.Abs(best.Value - near)) best = at;
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// Converts an offset in output frames to an offset in source frames, and back.
     /// </summary>
     /// <remarks>
     /// The common case by far is that every source came off the same recorder at the
     /// project's own rate, so the fast path is an equality check and no arithmetic at all.
+    /// Both floor, so neither can claim a frame that is not there.
     /// </remarks>
     private static long ToSourceFrames(long offset, SourceMedia source, OutputFormat output) =>
         source.FrameRate.EquivalentTo(output.FrameRate)
             ? offset
             : RationalMath.RescaleFloor(offset, output.FrameRate.Inverse, source.FrameRate.Inverse);
+
+    private static long ToOutputFrames(long offset, SourceMedia source, OutputFormat output) =>
+        source.FrameRate.EquivalentTo(output.FrameRate)
+            ? offset
+            : RationalMath.RescaleFloor(offset, source.FrameRate.Inverse, output.FrameRate.Inverse);
 
     private int FindBase(long frame)
     {

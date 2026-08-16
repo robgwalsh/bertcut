@@ -42,6 +42,18 @@ public enum EditorMode
 
     /// <summary>Placing a picture-in-picture overlay.</summary>
     Overlay,
+
+    /// <summary>
+    /// Choosing what a new overlay will show, before there is anything to position.
+    /// </summary>
+    /// <remarks>
+    /// A mode rather than a panel that quietly swallows keystrokes, so the card's keys resolve
+    /// through the same map as every other key: they are rebindable, they appear on the
+    /// Controls page, and a scripted run presses them exactly as a user does. It is
+    /// deliberately not a <i>placement</i> mode — see <c>EditorViewModel.IsPlacing</c>, which
+    /// asks for the two by name because there is no rectangle to move here yet.
+    /// </remarks>
+    OverlaySource,
 }
 
 /// <summary>An action the user asked for, resolved from a keystroke.</summary>
@@ -93,7 +105,28 @@ public enum EditorIntent
 
     SnapTopLeft, SnapTopRight, SnapBottomLeft, SnapBottomRight, SnapCenter,
 
-    /// <summary>Slide the overlay's source in-point, to sync its content against the base.</summary>
+    /// <summary>
+    /// What a new overlay will show. The three answers the source card offers.
+    /// </summary>
+    /// <remarks>
+    /// Content only: none of them says where the clip goes, which is the playhead's job from
+    /// the moment one of these is chosen. <see cref="ChooseOverlayFile"/> opens a file dialog
+    /// and is therefore handled by the window rather than the view model, alongside
+    /// <see cref="ImportSource"/>.
+    /// </remarks>
+    ChooseOverlayMarkedRange, ChooseOverlaySegment, ChooseOverlayFile,
+
+    /// <summary>
+    /// No longer bound: these slid a pending overlay's source in-point, which is the one thing
+    /// positioning a clip must not change now that its content is chosen up front rather than
+    /// inferred. A committed clip is still synced by <see cref="SyncOverlayAudio"/>, and still
+    /// trimmed by its edges on the strip.
+    /// </summary>
+    /// <remarks>
+    /// Kept in the enum for the same reason as <see cref="ToggleOverlayMute"/>: the values are
+    /// named in stored key customizations, and a binding whose default has disappeared is
+    /// dropped as an unknown id rather than crashing the Controls page.
+    /// </remarks>
     TrimOverlayBack, TrimOverlayForward,
 
     /// <summary>
@@ -174,7 +207,7 @@ public static class KeyMap
         new(EditorKey.S, EditorModifiers.None, EditorMode.Normal, EditorIntent.SplitAtPlayhead, "Split at the playhead"),
         new(EditorKey.C, EditorModifiers.None, EditorMode.Normal, EditorIntent.BeginCrop, "Crop the marked range, or the whole video if nothing is marked"),
         new(EditorKey.C, EditorModifiers.Shift, EditorMode.Normal, EditorIntent.ClearCropAtPlayhead, "Clear the crop under the playhead"),
-        new(EditorKey.P, EditorModifiers.None, EditorMode.Normal, EditorIntent.BeginOverlay, "Place an overlay over the marked range"),
+        new(EditorKey.P, EditorModifiers.None, EditorMode.Normal, EditorIntent.BeginOverlay, "Overlay a clip — asks what to overlay"),
         new(EditorKey.P, EditorModifiers.Shift, EditorMode.Normal, EditorIntent.RemoveOverlayAtPlayhead, "Remove the selected overlay, or the one under the playhead"),
 
         // The key everyone reaches for once something is picked out on the strip. Bare Delete
@@ -189,10 +222,22 @@ public static class KeyMap
         .. PlacementBindings(EditorMode.Crop, "Apply the crop"),
         .. PlacementBindings(EditorMode.Overlay, "Place the overlay"),
 
-        // Only overlays have a source to slide against the base track.
-        new(EditorKey.Left, EditorModifiers.Alt, EditorMode.Overlay, EditorIntent.TrimOverlayBack, "Overlay content back one frame"),
-        new(EditorKey.Right, EditorModifiers.Alt, EditorMode.Overlay, EditorIntent.TrimOverlayForward, "Overlay content forward one frame"),
-        new(EditorKey.A, EditorModifiers.None, EditorMode.Overlay, EditorIntent.SyncOverlayAudio, "Sync to the base track by sound"),
+        // Saying what to overlay. Three rows on a card, and the digits printed on them.
+        new(EditorKey.D1, EditorModifiers.None, EditorMode.OverlaySource, EditorIntent.ChooseOverlayMarkedRange, "Overlay the marked range"),
+        new(EditorKey.D2, EditorModifiers.None, EditorMode.OverlaySource, EditorIntent.ChooseOverlaySegment, "Overlay the selected segment"),
+        new(EditorKey.D3, EditorModifiers.None, EditorMode.OverlaySource, EditorIntent.ChooseOverlayFile, "Overlay a video file"),
+        new(EditorKey.Escape, EditorModifiers.None, EditorMode.OverlaySource, EditorIntent.Cancel, "Cancel"),
+
+        // Aiming a chosen clip. The arrows are spoken for by the rectangle, and these are the
+        // keys that already mean "move the playhead" everywhere else in the editor — which is
+        // exactly what they do here, the clip riding along with it.
+        new(EditorKey.Comma, EditorModifiers.None, EditorMode.Overlay, EditorIntent.StepBack, "Move the overlay back one frame"),
+        new(EditorKey.Period, EditorModifiers.None, EditorMode.Overlay, EditorIntent.StepForward, "Move the overlay forward one frame"),
+        new(EditorKey.Comma, EditorModifiers.Shift, EditorMode.Overlay, EditorIntent.StepBackSecond, "Back one second"),
+        new(EditorKey.Period, EditorModifiers.Shift, EditorMode.Overlay, EditorIntent.StepForwardSecond, "Forward one second"),
+        new(EditorKey.Home, EditorModifiers.None, EditorMode.Overlay, EditorIntent.GoToStart, "Move it to the start"),
+        new(EditorKey.End, EditorModifiers.None, EditorMode.Overlay, EditorIntent.GoToEnd, "Move it to the end"),
+        new(EditorKey.A, EditorModifiers.None, EditorMode.Overlay, EditorIntent.SyncOverlayAudio, "Put it where the sound matches"),
 
         // Document and view
         new(EditorKey.Z, EditorModifiers.Control, EditorMode.Normal, EditorIntent.Undo, "Undo"),
@@ -253,9 +298,16 @@ public static class KeyMap
     /// box around, whatever its intent. Only the Normal-mode bindings are sorted by what
     /// they do.
     /// </remarks>
-    public static string Category(KeyBinding binding) => binding.Mode != EditorMode.Normal
-        ? "Place a box"
-        : binding.Intent switch
+    /// <remarks>
+    /// Except the overlay source card, which is a mode without being a placement: its keys
+    /// choose a clip rather than move anything, and listing them under a heading about boxes
+    /// would file them where nobody looking for them would read.
+    /// </remarks>
+    public static string Category(KeyBinding binding) => binding.Mode switch
+    {
+        EditorMode.OverlaySource => "Overlay what",
+        EditorMode.Crop or EditorMode.Overlay => "Place a box",
+        _ => binding.Intent switch
         {
             EditorIntent.PlayPause or EditorIntent.ShuttleForward or EditorIntent.ShuttleReverse
                 or EditorIntent.Stop or EditorIntent.StepBack or EditorIntent.StepForward
@@ -272,5 +324,6 @@ public static class KeyMap
                 or EditorIntent.ToggleOverlayMute => "Edit",
 
             _ => "File and view",
-        };
+        },
+    };
 }

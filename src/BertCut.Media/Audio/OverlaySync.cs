@@ -1,6 +1,7 @@
 using BertCut.Core.Audio;
 using BertCut.Core.Media;
 using BertCut.Core.Model;
+using BertCut.Core.Timeline;
 using BertCut.Media.Decode;
 
 namespace BertCut.Media.Audio;
@@ -21,6 +22,17 @@ public enum SyncFailure
 
     /// <summary>Nothing in the candidate correlates well enough to act on.</summary>
     NoConfidentMatch,
+
+    /// <summary>
+    /// The sound was found in the base recording, but at a moment that was cut out of the
+    /// timeline.
+    /// </summary>
+    /// <remarks>
+    /// Only reachable in the direction that moves a clip along the timeline. Reported rather
+    /// than rounded to the nearest surviving frame: the match is real, and the honest thing to
+    /// say is that the footage it lines up with is no longer in the edit.
+    /// </remarks>
+    MatchNotOnTimeline,
 }
 
 /// <summary>What a sync attempt concluded.</summary>
@@ -36,6 +48,26 @@ public readonly record struct SyncOutcome(
     public bool Succeeded => Failure == SyncFailure.None;
 
     public static SyncOutcome Failed(SyncFailure failure) => new(0, 0, 0, failure);
+}
+
+/// <summary>What a sync attempt concluded, when the clip is what moves.</summary>
+/// <param name="TimelineStartFrame">Where the overlay should start on the timeline.</param>
+/// <param name="Confidence">The verified coefficient, 0 to 1.</param>
+/// <param name="Runner">The next best offset's confidence, for judging decisiveness.</param>
+/// <remarks>
+/// Separate from <see cref="SyncOutcome"/> because the two directions answer different
+/// questions and a single record would leave the caller to remember which of two frame numbers
+/// its answer was in. See <see cref="OverlaySync.SolveTimelinePosition"/>.
+/// </remarks>
+public readonly record struct TimelineSyncOutcome(
+    long TimelineStartFrame,
+    double Confidence,
+    double Runner,
+    SyncFailure Failure)
+{
+    public bool Succeeded => Failure == SyncFailure.None;
+
+    public static TimelineSyncOutcome Failed(SyncFailure failure) => new(0, 0, 0, failure);
 }
 
 /// <summary>
@@ -129,35 +161,162 @@ public static class OverlaySync
         var current = overlayIndex.SecondsOf(
             Math.Clamp(currentSourceStartFrame, 0, overlayIndex.FrameCount - 1));
 
-        var request = new SyncRequest(basePeaks, referenceStart, referenceLength, overlayPeaks)
-        {
-            // Only when they are the same file: otherwise every offset is admissible.
-            Exclude = baseSource.Id == overlaySource.Id
-                ? (referenceStart, referenceStart + referenceLength)
-                : null,
-            PreferNear = current,
-        };
-
-        var coarse = AudioSync.FindOffsets(request);
-        if (coarse.Count == 0) return SyncOutcome.Failed(SyncFailure.NoConfidentMatch);
-
-        var runnerUp = coarse.Count > 1 ? coarse[1].Confidence : 0;
-
-        var verified = Verify(
-            baseSource.Path, referenceStart, referenceLength,
-            overlaySource.Path, coarse[0].OffsetSeconds,
+        var match = Correlate(
+            basePeaks, baseSource.Path, referenceStart, referenceLength,
+            overlayPeaks, overlaySource.Path,
+            sameFile: baseSource.Id == overlaySource.Id,
+            preferNear: current,
             project.Output.SampleRate);
 
-        if (verified is not { } result || result.Confidence < MinimumConfidence)
-            return SyncOutcome.Failed(SyncFailure.NoConfidentMatch);
+        if (match is not { } found) return SyncOutcome.Failed(SyncFailure.NoConfidentMatch);
 
         var frame = overlayIndex.FrameOf(
-            (long)Math.Round(result.OffsetSeconds / overlayIndex.TimeBase.Approx));
+            (long)Math.Round(found.OffsetSeconds / overlayIndex.TimeBase.Approx));
 
         var limit = Math.Max(0, overlaySource.FrameCount - range.Length);
 
         return new SyncOutcome(
-            Math.Clamp(frame, 0, limit), result.Confidence, runnerUp, SyncFailure.None);
+            Math.Clamp(frame, 0, limit), found.Confidence, found.Runner, SyncFailure.None);
+    }
+
+    /// <summary>
+    /// Finds where on the timeline a clip belongs, so its content lines up with the base
+    /// track's sound.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The other direction from <see cref="Solve"/>, and the one an overlay being placed wants.
+    /// There the timeline range was fixed and the question was where in the source to read;
+    /// here the content is what the user chose and must not change, so what moves is the clip.
+    /// Reference and candidate simply swap: the pattern is the overlay's own audio, and it is
+    /// hunted for in the base recording.
+    /// </para>
+    /// <para>
+    /// The identity trap is unchanged and still has to be refused. When the overlay's source
+    /// <i>is</i> the base's — one recording holding two angles, the case this feature exists
+    /// for — the overlay's audio matches itself perfectly wherever it already sits, and taking
+    /// the highest peak would answer "leave it exactly where it is" every time.
+    /// </para>
+    /// </remarks>
+    /// <param name="lengthFrames">The clip's length on the timeline, in output frames.</param>
+    /// <param name="currentTimelineStart">
+    /// Where the clip sits now. Used to break ties toward staying put, so running this twice
+    /// does not walk a clip that is already right.
+    /// </param>
+    public static TimelineSyncOutcome SolveTimelinePosition(
+        Project project,
+        int overlaySourceId,
+        long overlaySourceStartFrame,
+        long lengthFrames,
+        long currentTimelineStart,
+        Func<int, SourceIndex> indexOf,
+        Func<int, AudioPeaks?> peaksOf)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(indexOf);
+        ArgumentNullException.ThrowIfNull(peaksOf);
+
+        if (project.Base.IsEmpty) return TimelineSyncOutcome.Failed(SyncFailure.NoAudio);
+
+        var baseSegment = SegmentAt(project, currentTimelineStart);
+        var baseSource = project.RequireSource(baseSegment.SourceId);
+        var overlaySource = project.FindSource(overlaySourceId);
+
+        if (overlaySource is null) return TimelineSyncOutcome.Failed(SyncFailure.NoAudio);
+        if (!baseSource.HasAudio || !overlaySource.HasAudio)
+            return TimelineSyncOutcome.Failed(SyncFailure.NoAudio);
+
+        var basePeaks = peaksOf(baseSource.Id);
+        var overlayPeaks = peaksOf(overlaySource.Id);
+        if (basePeaks is null || overlayPeaks is null)
+            return TimelineSyncOutcome.Failed(SyncFailure.NotAnalysed);
+
+        var baseIndex = indexOf(baseSource.Id);
+        var overlayIndex = indexOf(overlaySource.Id);
+
+        // The reference is the clip's own audio, in the overlay source's seconds.
+        var referenceStart = overlayIndex.SecondsOf(
+            Math.Clamp(overlaySourceStartFrame, 0, overlayIndex.FrameCount - 1));
+
+        var referenceLength = Math.Min(
+            lengthFrames / project.Output.FrameRate.Approx, MaximumReferenceSeconds);
+
+        if (referenceLength < MinimumReferenceSeconds)
+            return TimelineSyncOutcome.Failed(SyncFailure.RangeTooShort);
+
+        // Ties break toward where the clip already is, expressed in the candidate's seconds —
+        // which for the base track means reading the timeline position back through the
+        // segment it lands in.
+        var into = currentTimelineStart - baseSegment.TimelineStart;
+        var preferNear = baseIndex.SecondsOf(Math.Clamp(
+            baseSegment.SourceStartFrame + into, 0, baseIndex.FrameCount - 1));
+
+        var match = Correlate(
+            overlayPeaks, overlaySource.Path, referenceStart, referenceLength,
+            basePeaks, baseSource.Path,
+            sameFile: baseSource.Id == overlaySource.Id,
+            preferNear: preferNear,
+            project.Output.SampleRate);
+
+        if (match is not { } found) return TimelineSyncOutcome.Failed(SyncFailure.NoConfidentMatch);
+
+        var baseFrame = baseIndex.FrameOf(
+            (long)Math.Round(found.OffsetSeconds / baseIndex.TimeBase.Approx));
+
+        // The answer is a moment in the recording; the timeline is only what survived the
+        // cutting, so it may not be on it at all — and if the edit shows it twice, the one
+        // nearest where the clip already sits is the one that moves it least.
+        var at = new TimelineResolver(project)
+            .TimelineFrameOf(baseSource.Id, baseFrame, currentTimelineStart);
+
+        if (at is null) return TimelineSyncOutcome.Failed(SyncFailure.MatchNotOnTimeline);
+
+        var limit = Math.Max(0, project.DurationFrames - lengthFrames);
+
+        return new TimelineSyncOutcome(
+            Math.Clamp(at.Value, 0, limit), found.Confidence, found.Runner, SyncFailure.None);
+    }
+
+    /// <summary>
+    /// The two passes, in whichever direction the caller is asking.
+    /// </summary>
+    /// <remarks>
+    /// Both entry points want the same thing — a coarse answer over the cached envelopes,
+    /// independently re-checked against real audio — and differ only in which recording plays
+    /// the part of the pattern. Keeping one copy is what stops the identity exclusion from
+    /// being fixed in one direction and forgotten in the other.
+    /// </remarks>
+    private static (double OffsetSeconds, double Confidence, double Runner)? Correlate(
+        AudioPeaks referencePeaks,
+        string referencePath,
+        double referenceStart,
+        double referenceLength,
+        AudioPeaks candidatePeaks,
+        string candidatePath,
+        bool sameFile,
+        double preferNear,
+        int sampleRate)
+    {
+        var request = new SyncRequest(referencePeaks, referenceStart, referenceLength, candidatePeaks)
+        {
+            // Only when they are the same file: otherwise every offset is admissible.
+            Exclude = sameFile ? (referenceStart, referenceStart + referenceLength) : null,
+            PreferNear = preferNear,
+        };
+
+        var coarse = AudioSync.FindOffsets(request);
+        if (coarse.Count == 0) return null;
+
+        var runnerUp = coarse.Count > 1 ? coarse[1].Confidence : 0;
+
+        var verified = Verify(
+            referencePath, referenceStart, referenceLength,
+            candidatePath, coarse[0].OffsetSeconds,
+            sampleRate);
+
+        if (verified is not { } result || result.Confidence < MinimumConfidence) return null;
+
+        return (result.OffsetSeconds, result.Confidence, runnerUp);
     }
 
     /// <summary>

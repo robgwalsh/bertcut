@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
+using BertCut.Core.Input;
 using BertCut.Core.Model;
 using BertCut.Core.Time;
 using BertCut.Core.Timeline;
@@ -65,6 +66,8 @@ public sealed class TimelineControl : FrameworkElement
     private static readonly Brush OverlayBrush = Frozen(Color.FromArgb(0xAA, 0x6D, 0xD4, 0x8B));
     private static readonly Brush OverlaySelectedBrush = Frozen(Color.FromRgb(0x9A, 0xEB, 0xB2));
     private static readonly Pen OverlaySelectedPen = FrozenPen(Color.FromRgb(0xF2, 0xFF, 0xF6), 1);
+    private static readonly Brush OverlayPendingBrush = Frozen(Color.FromArgb(0x44, 0x6D, 0xD4, 0x8B));
+    private static readonly Pen OverlayPendingPen = FrozenPen(Color.FromArgb(0x99, 0x9A, 0xEB, 0xB2), 1);
     private static readonly Brush GripBrush = Frozen(Color.FromRgb(0x22, 0x5F, 0x3B));
     private static readonly Brush BackgroundBrush = Frozen(Color.FromRgb(0x1E, 0x22, 0x28));
     private static readonly Pen BoundaryPen = FrozenPen(Color.FromRgb(0x11, 0x14, 0x18), 1);
@@ -255,6 +258,15 @@ public sealed class TimelineControl : FrameworkElement
             dc.DrawRectangle(GripBrush, null, new Rect(band.X, band.Y, grip, band.Height));
             dc.DrawRectangle(GripBrush, null, new Rect(band.Right - grip, band.Y, grip, band.Height));
         }
+
+        // An overlay being positioned has no clip on the strip yet, and without marks it has
+        // no marked range either — so the span Enter would commit is drawn in its own lane,
+        // faint and outlined. Faint because it is a proposal; in the overlay lane and not
+        // somewhere of its own because where it lands is the whole question. Painted over the
+        // committed bands, since it truncates whatever it overlaps when it is placed.
+        if (_model.Mode == EditorMode.Overlay)
+            dc.DrawRectangle(
+                OverlayPendingBrush, OverlayPendingPen, OverlayBandRect(_model.PendingRange, width));
 
         DrawWaveform(dc, width, waveTop);
 

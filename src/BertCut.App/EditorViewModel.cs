@@ -56,6 +56,8 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
     private EditorMode _mode = EditorMode.Normal;
     private RectI _pendingRect;
+    private FrameRange _pendingRange;
+    private OverlayContent? _pendingContent;
     private long _playhead;
     private long? _markIn;
     private long? _markOut;
@@ -125,11 +127,21 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
             _mode = value;
             Notify();
             Notify(nameof(IsPlacing));
+            Notify(nameof(IsChoosingOverlaySource));
         }
     }
 
     /// <summary>True while a crop or overlay rectangle is being positioned.</summary>
-    public bool IsPlacing => Mode != EditorMode.Normal;
+    /// <remarks>
+    /// Named for the rectangle rather than for the mode, and asked by name rather than as
+    /// "not Normal": <see cref="EditorMode.OverlaySource"/> is a question about which clip,
+    /// asked before there is a rectangle to put anywhere. <c>RectEditor</c> watches this, and
+    /// a box appearing behind the card would be answering a question nobody had asked yet.
+    /// </remarks>
+    public bool IsPlacing => Mode is EditorMode.Crop or EditorMode.Overlay;
+
+    /// <summary>True while the overlay source card is up.</summary>
+    public bool IsChoosingOverlaySource => Mode == EditorMode.OverlaySource;
 
     /// <summary>The rectangle being positioned, in output-space pixels.</summary>
     public RectI PendingRect
@@ -144,22 +156,44 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     }
 
     /// <summary>The timeline range the pending rectangle will apply to.</summary>
-    public FrameRange PendingRange { get; private set; }
+    /// <remarks>
+    /// A crop's range is the marks it was started from and does not move. An overlay's is
+    /// worked out from the playhead every time the playhead moves, so that the faint band on
+    /// the strip is the answer to "where would this go if I pressed Enter now" rather than a
+    /// decision taken once when the source was chosen.
+    /// </remarks>
+    public FrameRange PendingRange
+    {
+        get => _pendingRange;
+        private set
+        {
+            if (_pendingRange == value) return;
 
-    /// <summary>Which source the pending overlay draws from.</summary>
-    public int PendingOverlaySourceId { get; private set; }
-
-    /// <summary>Where in that source the pending overlay starts.</summary>
-    public long PendingOverlaySourceStart { get; private set; }
+            _pendingRange = value;
+            Notify();
+        }
+    }
 
     /// <summary>
-    /// The source a new overlay will be taken from — the most recently imported file, or
-    /// the base video itself when nothing else has been imported.
+    /// What a pending overlay shows: settled when its source is chosen, and never touched
+    /// again while it is being positioned.
     /// </summary>
-    public int OverlaySourceId { get; private set; }
+    /// <remarks>
+    /// The two questions an overlay asks are deliberately separated. This one — which frames,
+    /// and how many — is answered by the card. Where they go is answered by the playhead, and
+    /// moving the clip along the timeline must never quietly change what is in it.
+    /// </remarks>
+    public OverlayContent? PendingOverlayContent => _pendingContent;
 
-    public string OverlaySourceName =>
-        Project.FindSource(OverlaySourceId) is { } source ? Path.GetFileName(source.Path) : "—";
+    /// <summary>Which source the pending overlay draws from.</summary>
+    public int PendingOverlaySourceId => _pendingContent?.SourceId ?? 0;
+
+    /// <summary>Where in that source the pending overlay starts.</summary>
+    public long PendingOverlaySourceStart => _pendingContent?.SourceStartFrame ?? 0;
+
+    // There used to be an OverlaySourceId here — "the most recently imported file, or the base
+    // video itself" — which is what a new overlay was silently taken from. The source card asks
+    // instead, so the guess and the name it was displayed under are both gone.
 
     public long DurationFrames => Project.DurationFrames;
 
@@ -174,6 +208,11 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
             if (_playhead == clamped) return;
 
             _playhead = clamped;
+
+            // Before anything is told the playhead moved: a pending overlay starts at the
+            // playhead, so the band and the composited frame both read this on the way out.
+            UpdatePendingRange();
+
             Notify();
             Notify(nameof(TimecodeText));
             RenderCurrentFrame();
@@ -434,11 +473,6 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
             MarkOut = null;
             Mode = EditorMode.Normal;
 
-            // With nothing else imported, an overlay comes from the base video itself —
-            // a zoomed inset of one moment shown over the full view.
-            OverlaySourceId = _document.Current.Sources[0].Id;
-            Notify(nameof(OverlaySourceName));
-
             foreach (var source in _document.Current.Sources) BeginPeaks(source);
 
             OnDocumentChanged(_document.Current);
@@ -488,10 +522,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
             BeginPeaks(Project.RequireSource(nextId));
 
-            OverlaySourceId = nextId;
-            Notify(nameof(OverlaySourceName));
-
-            Status = $"{Path.GetFileName(path)} imported — press P over a marked range to overlay it";
+            Status = $"{Path.GetFileName(path)} imported — press P to overlay it";
         }
         catch (Exception e) when (e is InvalidOperationException or IOException or FfmpegDecodeException)
         {
@@ -613,9 +644,6 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         MarkIn = null;
         MarkOut = null;
         Mode = EditorMode.Normal;
-
-        OverlaySourceId = id;
-        Notify(nameof(OverlaySourceName));
         Notify(nameof(Playhead));
         Notify(nameof(TimecodeText));
 
@@ -693,9 +721,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         // to render with.
         _pendingRect = default;
         PendingRange = default;
-        PendingOverlaySourceId = 0;
-        PendingOverlaySourceStart = 0;
-        OverlaySourceId = 0;
+        _pendingContent = null;
 
         // Rebuilds the resolver and tells everything bound to this that the project is
         // empty — which is also what puts the timeline and the placement layer back.
@@ -705,8 +731,6 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         // nothing to save and no key to save it under, so disarm it rather than leave a
         // timer to fire into a null session key three quarters of a second from now.
         _autosave.Stop();
-
-        Notify(nameof(OverlaySourceName));
         Notify(nameof(Playhead));
 
         Status = "Closed — press Ctrl+O to open a video.";
@@ -776,6 +800,9 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
             case EditorIntent.Commit: CommitPlacement(); break;
             case EditorIntent.Cancel: CancelPlacement(); break;
 
+            case EditorIntent.ChooseOverlayMarkedRange: ChooseOverlayMarkedRange(); break;
+            case EditorIntent.ChooseOverlaySegment: ChooseOverlaySegment(); break;
+
             case EditorIntent.NudgeLeft: Nudge(-NudgeStep, 0); break;
             case EditorIntent.NudgeRight: Nudge(NudgeStep, 0); break;
             case EditorIntent.NudgeUp: Nudge(0, -NudgeStep); break;
@@ -789,8 +816,6 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
             case EditorIntent.SnapBottomRight: SnapTo(Anchor.BottomRight); break;
             case EditorIntent.SnapCenter: SnapTo(Anchor.Centre); break;
 
-            case EditorIntent.TrimOverlayBack: TrimOverlay(-1); break;
-            case EditorIntent.TrimOverlayForward: TrimOverlay(1); break;
             case EditorIntent.SyncOverlayAudio: SyncOverlayAudio(); break;
 
             case EditorIntent.ToggleMute: IsMuted = !IsMuted; Status = IsMuted ? "Muted" : "Unmuted"; break;
@@ -845,29 +870,132 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
                  + "1-5 snap · Enter applies · Esc cancels";
     }
 
+    /// <summary>Asks what to overlay, before asking where it goes.</summary>
+    /// <remarks>
+    /// One keypress used to place a clip outright, taking its content from whichever file had
+    /// been imported most recently and its length from however much of that file was left.
+    /// Neither was ever stated, so the only way to find out what you were going to get was to
+    /// press the key and look at what arrived. The card states both.
+    /// </remarks>
     private void BeginOverlay()
     {
-        if (SelectedRange is not { } range)
+        if (!HasMedia)
         {
-            Status = "Mark the range to overlay with I and O first.";
-            return;
-        }
-
-        if (Project.FindSource(OverlaySourceId) is not { } source)
-        {
-            Status = "Ctrl+I to import a video to overlay.";
+            Status = "Press Ctrl+O to open a video.";
             return;
         }
 
         ShuttleRate = 0;
-        PendingRange = range;
-        PendingOverlaySourceId = OverlaySourceId;
+        Mode = EditorMode.OverlaySource;
+        Status = "Overlay what? · 1 the marked range · 2 the selected segment · "
+                 + "3 a video file · Esc cancels";
+    }
 
-        // Overlaying the base video on itself is a zoomed inset of a moment, so it starts
-        // from what is already on screen; a separate file starts from its own beginning.
-        PendingOverlaySourceStart = source.Id == Project.Base[0].SourceId
-            ? _resolver.Resolve(range.Start)?.SourceFrame ?? 0
-            : 0;
+    /// <summary>The three ways of saying what a new overlay shows.</summary>
+    /// <remarks>
+    /// Each resolves to the same three numbers — which source, from which of its frames, for
+    /// how long — after which the kind is forgotten. See <see cref="OverlayPlacement"/>, which
+    /// holds the arithmetic so that it can be tested without a window.
+    /// </remarks>
+    private void ChooseOverlayMarkedRange()
+    {
+        if (SelectedRange is not { } range)
+        {
+            Status = "Nothing marked — press I and O to mark a range first.";
+            return;
+        }
+
+        if (OverlayPlacement.FromTimelineRange(Project, range) is not { } content)
+        {
+            Status = "Nothing to overlay in the marked range.";
+            return;
+        }
+
+        // Capped at the cut it starts in: one clip reads one contiguous run of one source.
+        var clipped = content.LengthFrames < range.Length
+            ? $" (the marked range crosses a cut — taking its first {content.LengthFrames} frames)"
+            : "";
+
+        EnterOverlayPlacement(content, $"the marked range{clipped}");
+    }
+
+    private void ChooseOverlaySegment()
+    {
+        if (SelectedSegment is not { } index)
+        {
+            Status = "No segment selected — click one on the track first.";
+            return;
+        }
+
+        if (OverlayPlacement.FromSegment(Project, index) is not { } content)
+        {
+            Status = "Nothing to overlay in that segment.";
+            return;
+        }
+
+        EnterOverlayPlacement(content, $"segment {index + 1}");
+    }
+
+    /// <summary>
+    /// Brings a file in and takes it straight into placement, whole.
+    /// </summary>
+    /// <remarks>
+    /// The card's third row. Split from the file dialog that normally supplies the path so a
+    /// scripted run can drive everything except the picker itself — the same seam
+    /// <c>ImportAsync</c> already has, and for the same reason: a common dialog belongs to the
+    /// desktop and would appear on the user's screen wherever the window was parked.
+    /// </remarks>
+    public async Task ImportAndOverlayAsync(string path)
+    {
+        var before = Project.Sources.Length;
+
+        await ImportAsync(path);
+
+        // A failed import has already said so in the status; saying it again in other words
+        // would only cover that up.
+        if (Project.Sources.Length == before) return;
+
+        ChooseOverlayFile(Project.Sources[^1].Id);
+    }
+
+    /// <summary>Overlays an already-imported file, whole.</summary>
+    public void ChooseOverlayFile(int sourceId)
+    {
+        if (OverlayPlacement.FromWholeSource(Project, sourceId) is not { } content)
+        {
+            Status = "That file has no frames to overlay.";
+            return;
+        }
+
+        EnterOverlayPlacement(content, Path.GetFileName(Project.RequireSource(sourceId).Path));
+    }
+
+    /// <summary>
+    /// Takes a chosen clip into placement, where the playhead decides where it goes.
+    /// </summary>
+    private void EnterOverlayPlacement(OverlayContent content, string what)
+    {
+        var source = Project.RequireSource(content.SourceId);
+
+        ShuttleRate = 0;
+        _pendingContent = content;
+
+        // Not through UpdatePendingRange, which is guarded on the mode this is about to enter.
+        PendingRange = OverlayPlacement.RangeAt(Project, content, Playhead);
+
+        if (PendingRange.IsEmpty)
+        {
+            _pendingContent = null;
+            Mode = EditorMode.Normal;
+            Status = "No room for it here — there is already an overlay across this stretch.";
+            return;
+        }
+
+        // Before the rectangle, whose setter renders: PreviewResolver only composites the
+        // pending clip in this mode, so setting it afterwards would leave the first frame of
+        // the placement showing no overlay at all — and nothing else would redraw until the
+        // user moved something.
+        Mode = EditorMode.Overlay;
 
         // Locked to the overlay source's own ratio, so its picture is never stretched.
         PendingRect = RectPlacement.Initial(
@@ -879,9 +1007,24 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
             PendingRect, Project.Output.Width, Project.Output.Height, Anchor.BottomRight,
             margin: Project.Output.Width / 50);
 
-        Mode = EditorMode.Overlay;
-        Status = $"Overlaying {Path.GetFileName(source.Path)} · arrows move · Shift+↑/↓ resize · " +
-                 "1-5 snap · Alt+←/→ sync · Enter places · Esc cancels";
+        Status = $"Placing {what} · move the playhead to aim it · A syncs it by sound · "
+                 + "arrows move the box · Enter places · Esc cancels";
+    }
+
+    /// <summary>
+    /// Works out where the pending clip would land, from the playhead it follows.
+    /// </summary>
+    /// <remarks>
+    /// Called from the <see cref="Playhead"/> setter, so that moving the playhead by any
+    /// means — a key, the ruler, an audio sync — carries the clip with it, and from
+    /// <see cref="OnDocumentChanged"/>, because an undo can shorten the timeline out from
+    /// under a clip that is still being positioned.
+    /// </remarks>
+    private void UpdatePendingRange()
+    {
+        if (Mode != EditorMode.Overlay || _pendingContent is not { } content) return;
+
+        PendingRange = OverlayPlacement.RangeAt(Project, content, Playhead);
     }
 
     private void CommitPlacement()
@@ -892,28 +1035,43 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
                 var range = PendingRange;
                 var rect = PendingRect;
                 Apply($"Crop {rect.W}x{rect.H}", p => TimelineEdits.SetCrop(p, range, rect));
+
+                // The crop is the range the marks named, so they have been spent. An overlay
+                // never reads them, and dropping marks it did not use would lose work the
+                // user is still holding.
+                MarkIn = null;
+                MarkOut = null;
                 break;
 
             case EditorMode.Overlay:
                 var clip = new OverlayClip(
                     PendingRange, PendingOverlaySourceId, PendingOverlaySourceStart, PendingRect);
                 Apply("Place overlay", p => TimelineEdits.AddOverlay(p, clip));
+
+                // Marks are not spent. A crop *is* the range they named, but an overlay
+                // borrowed them to say what to show and left where they are alone — and
+                // dropping them would lose a range the user may still be about to cut.
                 break;
 
             default:
                 return;
         }
 
+        _pendingContent = null;
         Mode = EditorMode.Normal;
-        MarkIn = null;
-        MarkOut = null;
         RenderCurrentFrame();
     }
 
+    /// <summary>Backs out of an overlay, from either half of it.</summary>
+    /// <remarks>
+    /// Not <see cref="IsPlacing"/>: Escape has to put the source card away too, and that is
+    /// the one mode where there is no rectangle in play.
+    /// </remarks>
     private void CancelPlacement()
     {
         if (Mode == EditorMode.Normal) return;
 
+        _pendingContent = null;
         Mode = EditorMode.Normal;
         Status = "Cancelled";
         RenderCurrentFrame();
@@ -922,7 +1080,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     /// <summary>Positions the pending rectangle from a mouse drag, in output-space pixels.</summary>
     public void SetPendingRect(RectI rect)
     {
-        if (Mode == EditorMode.Normal) return;
+        if (!IsPlacing) return;
 
         PendingRect = RectPlacement.Clamp(rect, Project.Output.Width, Project.Output.Height);
     }
@@ -930,7 +1088,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     /// <summary>Builds an aspect-locked rectangle from a freehand drag.</summary>
     public void DragPendingRect(int x0, int y0, int x1, int y1)
     {
-        if (Mode == EditorMode.Normal) return;
+        if (!IsPlacing) return;
 
         var (aspectW, aspectH) = PendingAspect();
         PendingRect = RectPlacement.FromDrag(
@@ -940,7 +1098,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     /// <summary>Resizes the pending rectangle from a dragged corner handle.</summary>
     public void ResizePendingRect(int anchorX, int anchorY, int x, int y)
     {
-        if (Mode == EditorMode.Normal) return;
+        if (!IsPlacing) return;
 
         var (aspectW, aspectH) = PendingAspect();
         PendingRect = RectPlacement.FromCorner(
@@ -956,47 +1114,41 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
     private void Nudge(int dx, int dy)
     {
-        if (Mode == EditorMode.Normal) return;
+        if (!IsPlacing) return;
         PendingRect = RectPlacement.Move(PendingRect, dx, dy, Project.Output.Width, Project.Output.Height);
     }
 
     private void Resize(double factor)
     {
-        if (Mode == EditorMode.Normal) return;
+        if (!IsPlacing) return;
         PendingRect = RectPlacement.Resize(PendingRect, factor, Project.Output.Width, Project.Output.Height);
     }
 
     private void SnapTo(Anchor anchor)
     {
-        if (Mode == EditorMode.Normal) return;
+        if (!IsPlacing) return;
 
         var margin = anchor == Anchor.Centre ? 0 : Project.Output.Width / 50;
         PendingRect = RectPlacement.Snap(
             PendingRect, Project.Output.Width, Project.Output.Height, anchor, margin);
     }
 
-    /// <summary>Slides the pending overlay's content against the base track.</summary>
-    private void TrimOverlay(int frames)
-    {
-        if (Mode != EditorMode.Overlay) return;
-
-        var source = Project.RequireSource(PendingOverlaySourceId);
-        var limit = Math.Max(0, source.FrameCount - PendingRange.Length);
-
-        PendingOverlaySourceStart = Math.Clamp(PendingOverlaySourceStart + frames, 0, limit);
-        Status = $"Overlay starts at source frame {PendingOverlaySourceStart}";
-        RenderCurrentFrame();
-    }
-
     /// <summary>
-    /// Slides the overlay's content until its sound matches the base track underneath it.
+    /// Lines an overlay up with the base track by its sound.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// What Alt+←/→ does one frame at a time, done in one press. The case it exists for is
-    /// one recording holding the same event from two angles: mark the stretch of the first
-    /// angle, overlay the second on top of it, and this finds the alignment by correlating
-    /// what the two of them heard.
+    /// The case it exists for is one recording holding the same event from two angles: take
+    /// the second angle as the overlay, put it over the first, and this finds the alignment
+    /// by correlating what the two of them heard.
+    /// </para>
+    /// <para>
+    /// <b>Which of the two things moves depends on which is still free.</b> While a clip is
+    /// being placed its content is what the user just chose and must not change, so what moves
+    /// is the clip — along the timeline, by way of the playhead it follows. Once it is
+    /// committed the reverse is true: the clip is where they put it, and the free variable is
+    /// which of its source's frames it reads. Both directions are
+    /// <see cref="OverlaySync"/>'s, and both refuse the identity match the same way.
     /// </para>
     /// <para>
     /// Runs off the UI thread — it may have to decode a whole audio track to build an
@@ -1012,35 +1164,73 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     /// </remarks>
     private void SyncOverlayAudio()
     {
-        var placing = Mode == EditorMode.Overlay;
+        if (Mode == EditorMode.Overlay) SyncPendingOverlay();
+        else SyncCommittedOverlay();
+    }
 
-        var range = placing ? PendingRange : default;
-        var sourceId = placing ? PendingOverlaySourceId : 0;
-        var current = placing ? PendingOverlaySourceStart : 0;
+    /// <summary>Moves the clip being placed to where its sound fits the base track.</summary>
+    private void SyncPendingOverlay()
+    {
+        if (_pendingContent is not { } content) return;
+
+        if (PendingRange.IsEmpty)
+        {
+            Status = "Nothing to sync.";
+            return;
+        }
+
+        ShuttleRate = 0;
+        IsBusy = true;
+        Status = "Matching the audio...";
+
+        var project = Project;
+        var indices = new Dictionary<int, SourceIndex>(_indices);
+        var rate = project.Output.SampleRate;
+        var from = PendingRange.Start;
+
+        _ = Task.Run(() =>
+        {
+            foreach (var source in project.Sources)
+                LoadPeaks(source.Id, source.Path, source.ContentKey, rate);
+
+            return OverlaySync.SolveTimelinePosition(
+                project, content.SourceId, content.SourceStartFrame, content.LengthFrames,
+                from, id => indices[id], PeaksFor);
+        })
+        .ContinueWith(
+            task => ApplyPendingSync(task, from),
+            CancellationToken.None,
+            TaskContinuationOptions.None,
+            TaskScheduler.FromCurrentSynchronizationContext());
+    }
+
+    /// <summary>Slides a placed clip's content until it matches the base track under it.</summary>
+    private void SyncCommittedOverlay()
+    {
+        var range = default(FrameRange);
+        var sourceId = 0;
+        var current = 0L;
         var index = -1;
 
-        if (!placing)
-        {
-            for (var i = 0; i < Project.Overlays.Length; i++)
-                if (Project.Overlays[i].Range.Contains(Playhead))
-                {
-                    index = i;
-                    range = Project.Overlays[i].Range;
-                    sourceId = Project.Overlays[i].SourceId;
-                    current = Project.Overlays[i].SourceStartFrame;
-                    break;
-                }
-
-            if (index < 0)
+        for (var i = 0; i < Project.Overlays.Length; i++)
+            if (Project.Overlays[i].Range.Contains(Playhead))
             {
-                Status = "No overlay under the playhead to sync.";
-                return;
+                index = i;
+                range = Project.Overlays[i].Range;
+                sourceId = Project.Overlays[i].SourceId;
+                current = Project.Overlays[i].SourceStartFrame;
+                break;
             }
+
+        if (index < 0)
+        {
+            Status = "No overlay under the playhead to sync.";
+            return;
         }
 
         if (range.IsEmpty)
         {
-            Status = "Mark the range to overlay with I and O first.";
+            Status = "Nothing to sync.";
             return;
         }
 
@@ -1065,14 +1255,20 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
                 PeaksFor);
         })
         .ContinueWith(
-            task => ApplySync(task, placing, index, current, range),
+            task => ApplySync(task, index, current),
             CancellationToken.None,
             TaskContinuationOptions.None,
             TaskScheduler.FromCurrentSynchronizationContext());
     }
 
-    private void ApplySync(
-        Task<SyncOutcome> task, bool placing, int index, long current, FrameRange range)
+    /// <summary>Puts the clip being placed where the correlation said it belongs.</summary>
+    /// <remarks>
+    /// Through the playhead rather than by writing <see cref="PendingRange"/>, which is derived
+    /// from it — a direct write would be undone by the next keystroke that moved the playhead.
+    /// Taking the playhead along also leaves the user looking at the frame the match was made
+    /// against, which is the one they want to check.
+    /// </remarks>
+    private void ApplyPendingSync(Task<TimelineSyncOutcome> task, long from)
     {
         IsBusy = false;
 
@@ -1086,43 +1282,76 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
         if (!outcome.Succeeded)
         {
-            Status = outcome.Failure switch
-            {
-                SyncFailure.NoAudio => "Sync needs sound: one of these clips has no audio track.",
-                SyncFailure.NotAnalysed => "Still analysing the audio — try again in a moment.",
-                SyncFailure.RangeTooShort =>
-                    $"Mark at least {OverlaySync.MinimumReferenceSeconds:0.##} seconds to match against.",
-                _ => "No confident audio match — Alt+←/→ to sync by hand.",
-            };
-
+            Status = Describe(outcome.Failure, placing: true);
             return;
         }
 
-        var moved = outcome.SourceStartFrame - current;
+        Playhead = outcome.TimelineStartFrame;
+
+        // Reported from where it actually landed: the clamp may have stopped it against a
+        // clip or the end of the timeline on the way.
+        var moved = PendingRange.Start - from;
+        Status = Summarise(moved, outcome.Confidence, outcome.Runner);
+    }
+
+    private void ApplySync(Task<SyncOutcome> task, int index, long current)
+    {
+        IsBusy = false;
+
+        if (task.IsFaulted)
+        {
+            Status = $"Could not match the audio: {task.Exception?.GetBaseException().Message}";
+            return;
+        }
+
+        var outcome = task.Result;
+
+        if (!outcome.Succeeded)
+        {
+            Status = Describe(outcome.Failure, placing: false);
+            return;
+        }
+
+        var target = outcome.SourceStartFrame;
+        var at = index;
+        Apply("Sync overlay", p => TimelineEdits.SetOverlaySourceStart(p, at, target));
+
+        Status = Summarise(target - current, outcome.Confidence, outcome.Runner);
+    }
+
+    /// <summary>Why a sync produced nothing, in the words of whichever half asked.</summary>
+    private static string Describe(SyncFailure failure, bool placing) => failure switch
+    {
+        SyncFailure.NoAudio => "Sync needs sound: one of these clips has no audio track.",
+        SyncFailure.NotAnalysed => "Still analysing the audio — try again in a moment.",
+        SyncFailure.RangeTooShort =>
+            $"Too short to match — an overlay needs at least "
+            + $"{OverlaySync.MinimumReferenceSeconds:0.##} seconds of sound to be recognised.",
+        SyncFailure.MatchNotOnTimeline =>
+            "Found the matching sound, but that part of the base track was cut out — "
+            + "there is nowhere on the timeline to put it.",
+        _ => placing
+            ? "No confident audio match — move the playhead to place it by eye."
+            : "No confident audio match — drag the clip's edges on the strip to sync by hand.",
+    };
+
+    /// <summary>How far it moved, and how much the answer is to be trusted.</summary>
+    /// <remarks>
+    /// The runner-up matters as much as the winner: two offsets that score alike mean the
+    /// recording says the same thing twice, and the user should look before trusting it.
+    /// </remarks>
+    private string Summarise(long moved, double confidence, double runner)
+    {
         var milliseconds = moved / Project.Output.FrameRate.Approx * 1000;
 
-        // The runner-up matters as much as the winner: two offsets that score alike mean the
-        // recording says the same thing twice, and the user should look before trusting it.
-        var decisive = outcome.Confidence - outcome.Runner > 0.15
+        var decisive = confidence - runner > 0.15
             ? ""
             : " — but another position matches nearly as well, so check it";
 
-        if (placing)
-        {
-            PendingOverlaySourceStart = outcome.SourceStartFrame;
-            RenderCurrentFrame();
-        }
-        else
-        {
-            var target = outcome.SourceStartFrame;
-            var at = index;
-            Apply("Sync overlay", p => TimelineEdits.SetOverlaySourceStart(p, at, target));
-        }
-
-        Status = moved == 0
-            ? $"Already in sync (confidence {outcome.Confidence:0.00}){decisive}"
+        return moved == 0
+            ? $"Already in sync (confidence {confidence:0.00}){decisive}"
             : $"Synced — moved {Math.Abs(moved)} frames {(moved > 0 ? "later" : "earlier")} " +
-              $"({Math.Abs(milliseconds):0} ms), confidence {outcome.Confidence:0.00}{decisive}";
+              $"({Math.Abs(milliseconds):0} ms), confidence {confidence:0.00}{decisive}";
     }
 
     private void ToggleOverlayMute()
@@ -1646,6 +1875,11 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     /// </remarks>
     public void HoldShuttle(int direction)
     {
+        // Not while a clip is being aimed. Holding a step key there is how the playhead is
+        // walked to where the overlay should go, and a hold that broke into playback would
+        // send the clip skating off down the timeline.
+        if (IsPlacing) { Dispatch(direction > 0 ? EditorIntent.StepForward : EditorIntent.StepBack); return; }
+
         if (ShuttleRate == direction) return;
 
         ShuttleRate = direction;
@@ -1711,6 +1945,10 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
         if (_playhead >= project.DurationFrames)
             _playhead = Math.Max(0, project.DurationFrames - 1);
+
+        // An undo reached through placement mode can shorten the timeline, or bring back a
+        // clip, under a band that is still being aimed.
+        UpdatePendingRange();
 
         _preview?.SetOutput(project.Output);
         RestartAudioIfPlaying();

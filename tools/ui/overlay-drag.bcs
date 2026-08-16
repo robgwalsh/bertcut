@@ -9,16 +9,19 @@
 sample clip.mp4 6
 open clip.mp4
 
-# An overlay over frames 30 to 90, of the video on itself.
+# An overlay over frames 30 to 90, of the video on itself. Marking the sixty frames first is
+# what makes it sixty frames long: the card settles the length, so there is nothing to trim
+# back afterwards. Escape then drops the marks and the selection together.
 goto 30
 key I
 goto 90
 key O
+goto 30
 key P
+overlay-source range
 key Enter
+key Escape
 
-# The playhead is on the out point, which is one past the end of a half-open range — so park
-# it inside the clip before asking about "the overlay under the playhead".
 goto 60
 assert-overlay-start 30
 shot 01-placed
@@ -62,8 +65,11 @@ goto 120
 key I
 goto 170
 key O
+goto 120
 key P
+overlay-source range
 key Enter
+key Escape
 
 select-overlay 145
 assert-overlay-selected 1
