@@ -527,6 +527,10 @@ public sealed class TimelineControl : FrameworkElement
         _model.ClearOverlaySelection();
         _model.ClearSegmentSelection();
         _drag = DragKind.Scrub;
+
+        // Before the first move, because that is what stops the transport: the rate to come
+        // back to is the one the press found, not the zero the scrub itself leaves behind.
+        _model.BeginScrub();
         ScrubToMouse(point.X);
     }
 
@@ -569,6 +573,7 @@ public sealed class TimelineControl : FrameworkElement
     {
         if (_drag == DragKind.Overlay) _model?.EndOverlayDrag();
         if (_drag == DragKind.Segment) _model?.EndSegmentDrag();
+        if (_drag == DragKind.Scrub) _model?.EndScrub();
 
         _drag = DragKind.None;
         _reordering = false;

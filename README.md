@@ -49,26 +49,6 @@ tests/               206 tests; the ffmpeg-dependent ones skip if it isn't insta
 `Core` deliberately depends on nothing but the BCL, so ripple-delete arithmetic, the
 timeline↔source mapping, and every ffmpeg argument are testable headlessly.
 
-## Three things worth knowing
-
-**Variable frame rate is handled up front.** OBS, ShareX, and the Windows capture tools
-routinely emit VFR, where a frame's timestamp is *not* `index / fps`. On import a single
-non-decoding `ffprobe` pass records the real timestamp of every frame, so every conversion
-above the decoder is an array lookup and VFR stops existing as a concept.
-
-**Preview and export derive from one place.** `RenderPlan` flattens the document into spans
-that the ffmpeg argument builder consumes; `TimelineResolver` answers the same question
-per-frame for the compositor. A property test asserts the two agree on every frame of
-randomly generated projects — that test is the WYSIWYG guarantee.
-
-**Overlays can line themselves up by ear.** Film an event from two angles, put both takes in
-one recording, cut the second angle out and drop it over the first as a picture-in-picture:
-press `A` and it slides into sync by correlating what the two cameras heard. The subtlety is
-that both angles usually live in the *same file*, so the base window matches itself at a
-perfect score as well as matching the real second angle — the useless answer outranks the
-right one. `AudioSync` refuses any offset overlapping the region the reference came from,
-which is the whole difference between the feature working and appearing to do nothing.
-
 ## Building and running from source
 
 Windows and the .NET 10 SDK. `tools/ffmpeg/` is not in the repository — it is ~200 MB and

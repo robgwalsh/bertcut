@@ -42,6 +42,26 @@ assert-frame 30
 shot 04-dragged-backward
 dump-preview 05-after-drag.png
 
+# A drag that interrupted playback hands it back on the drop: stopping the transport is a
+# side effect of pointing at a frame, not an instruction to stop. Bounded, because the
+# playhead is already running again by the time the drop returns.
+play
+sleep 200
+tick
+drag-playhead 40 200
+assert-frame-between 200 212
+sleep 400
+tick
+assert-frame-between 208 232
+stop
+
+# And a drag that found it stopped leaves it stopped.
+drag-playhead 200 100
+assert-frame 100
+sleep 400
+tick
+assert-frame 100
+
 # ---- scrubbing ------------------------------------------------------------------------
 # Each of these is a genuine seek across the file. They used to cost the length of half a
 # GOP on the UI thread apiece; the point of running a run of them is that the window is

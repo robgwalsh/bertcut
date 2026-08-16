@@ -161,7 +161,12 @@ that decision because it is a question about pixels; `EditorViewModel` owns what
 because the answer is an edit.
 
 - **The ruler** (the top 16px) and **the waveform lane** are the only things that move the
-  playhead. They are also where a press lets go of a selection.
+  playhead. They are also where a press lets go of a selection. A press there stops the
+  transport for as long as it lasts and hands it back on the drop — `BeginScrub`/`EndScrub`,
+  in the view model because it is a question about the transport, remember the rate the press
+  found. Stopping is a side effect of pointing at a frame rather than an instruction to stop,
+  and a click resumes on the same rule as a drag: whether the pointer happened to travel is
+  not a distinction the user makes.
 - **The track** selects a base segment and nothing else — clicking a clip does not seek, so
   picking one up never costs you your place. Dragging one past the middle of its neighbour
   reorders the running order; that waits for the pointer to travel `DragThreshold`, so

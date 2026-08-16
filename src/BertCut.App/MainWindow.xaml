@@ -130,6 +130,27 @@
                     <!-- The content of these buttons is a shape, so without an explicit
                          automation name a screen reader has nothing to announce. The same
                          name is what the tooltip prints. -->
+
+                    <!-- The transport row already has these two, and they are the same
+                         intent — a second route to a frame, not a second behaviour. They
+                         earn the space because stepping is what you do *before* marking:
+                         land on the frame, then mark it. Having to cross the window to the
+                         transport chips and back for every frame made the marks the only
+                         thing on this row you could not finish where you started. They lead
+                         the group for that reason, and stay neutral: the marks either side
+                         of them are the accented pair. -->
+                    <Button Style="{StaticResource IconButton}" Click="OnActionClick"
+                            Content="{StaticResource Icon.StepBack}"
+                            Tag="{x:Static input:EditorIntent.StepBack}"
+                            AutomationProperties.Name="Back one frame"
+                            AutomationProperties.HelpText="One frame at a time, so you can mark exactly where you meant to." />
+
+                    <Button Style="{StaticResource IconButton}" Click="OnActionClick"
+                            Content="{StaticResource Icon.StepForward}"
+                            Tag="{x:Static input:EditorIntent.StepForward}"
+                            AutomationProperties.Name="Forward one frame"
+                            AutomationProperties.HelpText="One frame at a time, so you can mark exactly where you meant to." />
+
                     <Button Style="{StaticResource IconButton}" Click="OnActionClick"
                             Content="{StaticResource Icon.MarkIn}"
                             Tag="{x:Static input:EditorIntent.MarkIn}"
@@ -330,7 +351,11 @@
                         Tag="{x:Static input:EditorIntent.GoToStart}"
                         AutomationProperties.Name="Go to start" />
 
-                <Button Style="{StaticResource TransportButton}" Click="OnActionClick"
+                <!-- Named, because the two shuttle chips are the only thing in the window
+                     that says which way the playhead is running: OnModelChanged lights
+                     whichever one is driving it. -->
+                <Button x:Name="ShuttleReverseButton" Style="{StaticResource TransportButton}"
+                        Click="OnActionClick"
                         Content="{StaticResource Icon.ShuttleReverse}"
                         Tag="{x:Static input:EditorIntent.ShuttleReverse}"
                         AutomationProperties.Name="Shuttle reverse"
@@ -371,7 +396,8 @@
                         Tag="{x:Static input:EditorIntent.StepForward}"
                         AutomationProperties.Name="Forward one frame" />
 
-                <Button Style="{StaticResource TransportButton}" Click="OnActionClick"
+                <Button x:Name="ShuttleForwardButton" Style="{StaticResource TransportButton}"
+                        Click="OnActionClick"
                         Content="{StaticResource Icon.ShuttleForward}"
                         Tag="{x:Static input:EditorIntent.ShuttleForward}"
                         AutomationProperties.Name="Shuttle forward"
@@ -402,29 +428,21 @@
 
         <local:TimelineControl x:Name="Timeline" Grid.Row="3" Margin="12,0,12,6" />
 
-        <!-- Status bar. The transport glyph leads it: a red cross when nothing is moving,
-             green chevrons pointing the way it is, one per doubling of speed. -->
+        <!-- Status bar. It once led with a transport glyph — a red cross when nothing was
+             moving, green chevrons for the way it was — which said what the transport
+             cluster two rows up now says in the place the eye is already looking: the
+             play/stop swap for whether it is running, a lit shuttle chip for which way, and
+             the label beside them for how fast. -->
         <Border Grid.Row="4" Background="#1A1E24" Padding="12,8">
             <Grid>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
-                <!-- Fixed width so the status text does not shift sideways as the speed
-                     changes, which at 8x would be four times a second. -->
-                <TextBlock x:Name="TransportIcon" Grid.Column="0"
-                           Width="46" TextAlignment="Left"
-                           FontFamily="Segoe UI Symbol, Segoe UI"
-                           FontSize="13" FontWeight="Bold"
-                           Foreground="#FF5C5C" Text="&#x2715;"
-                           VerticalAlignment="Center"
-                           AutomationProperties.Name="Transport state" />
-
-                <TextBlock x:Name="StatusLabel" Grid.Column="1" Style="{StaticResource StatusText}"
+                <TextBlock x:Name="StatusLabel" Grid.Column="0" Style="{StaticResource StatusText}"
                            TextTrimming="CharacterEllipsis" />
-                <TextBlock x:Name="HintLabel" Grid.Column="2" Style="{StaticResource StatusText}"
+                <TextBlock x:Name="HintLabel" Grid.Column="1" Style="{StaticResource StatusText}"
                            Foreground="#5C6774" Text="F1 shortcuts" />
             </Grid>
         </Border>

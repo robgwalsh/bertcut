@@ -809,7 +809,7 @@ public partial class MainWindow : Window
     /// </remarks>
     private const int MaxPreviewDivisor = 4;
 
-    private static readonly Brush StoppedBrush = Frozen(Color.FromRgb(0xFF, 0x5C, 0x5C));
+    /// <summary>The lit shuttle chip: the same green the play button offers.</summary>
     private static readonly Brush MovingBrush = Frozen(Color.FromRgb(0x6D, 0xD4, 0x8B));
 
     private void OnModelChanged(object? sender, PropertyChangedEventArgs e)
@@ -824,12 +824,13 @@ public partial class MainWindow : Window
         PlayButton.Visibility = _model.IsStopped ? Visibility.Visible : Visibility.Collapsed;
         StopButton.Visibility = _model.IsStopped ? Visibility.Collapsed : Visibility.Visible;
 
-        TransportIcon.Text = _model.TransportGlyph;
-        TransportIcon.Foreground = _model.IsStopped ? StoppedBrush : MovingBrush;
-
-        // The glyph is the whole readout for a screen reader, so it carries the words.
-        TransportIcon.ToolTip = _model.TransportText;
-        AutomationProperties.SetHelpText(TransportIcon, _model.TransportText);
+        // Which way it is going, on the two chips that mean the two directions. Nothing else
+        // in the window carries direction now: the play/stop swap says only that it moves,
+        // and the label beside them says how fast. Both assigned every time for the same
+        // reason as the visibilities — a dependency property set to the brush it already
+        // holds invalidates nothing.
+        ShuttleReverseButton.Foreground = _model.ShuttleRate < 0 ? MovingBrush : IdleChipBrush;
+        ShuttleForwardButton.Foreground = _model.ShuttleRate > 0 ? MovingBrush : IdleChipBrush;
 
         // Unlike the transport, this changes only when the key is pressed, so it is worth the
         // property check: swapping a Geometry every frame of playback would be work for
@@ -860,7 +861,7 @@ public partial class MainWindow : Window
         var label = muted ? "Unmute the preview" : "Mute the preview";
 
         MuteButton.Content = FindResource(muted ? "Icon.Muted" : "Icon.Sound");
-        MuteButton.Foreground = muted ? MutedBrush : UnmutedBrush;
+        MuteButton.Foreground = muted ? MutedBrush : IdleChipBrush;
 
         AutomationProperties.SetName(MuteButton, label);
 
@@ -873,8 +874,12 @@ public partial class MainWindow : Window
     /// <summary>Warm enough to catch the eye, since silence has no other tell.</summary>
     private static readonly Brush MutedBrush = Frozen(Color.FromRgb(0xE0, 0x8A, 0x55));
 
-    /// <summary>The same grey the rest of the transport chips use.</summary>
-    private static readonly Brush UnmutedBrush = Frozen(Color.FromRgb(0x9A, 0xA8, 0xB9));
+    /// <summary>
+    /// The grey a transport chip sits at when it is saying nothing — the same value
+    /// <c>TransportButton</c> sets in the theme, repeated here because a chip that has been
+    /// lit once has an explicit local value and cannot fall back to the style.
+    /// </summary>
+    private static readonly Brush IdleChipBrush = Frozen(Color.FromRgb(0x9A, 0xA8, 0xB9));
 
     private static Brush Frozen(Color color)
     {

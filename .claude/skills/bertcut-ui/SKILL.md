@@ -124,8 +124,9 @@ Options: `--out <dir>` · `--state-dir <dir>` · `--keep-state` · `--timeout <s
 
 Element names come straight from `MainWindow.xaml`: `Toolbar`, `ClearButton`, `ResetButton`,
 `PreviewImage`, `EmptyHint`, `Placement`, `RestoreToast`, `TransportRow`, `TransportControls`,
-`PlayButton`, `StopButton`, `MuteButton`, `TimecodeLabel`, `SelectionLabel`, `TransportLabel`,
-`Timeline`, `TransportIcon`, `StatusLabel`, `HintLabel`, `HelpOverlay`, `HelpCard`, `HelpList`,
+`PlayButton`, `StopButton`, `ShuttleReverseButton`, `ShuttleForwardButton`, `MuteButton`,
+`TimecodeLabel`, `SelectionLabel`, `TransportLabel`,
+`Timeline`, `StatusLabel`, `HintLabel`, `HelpOverlay`, `HelpCard`, `HelpList`,
 `StripHelp`, `SettingsOverlay`, `Settings`.
 
 `StripHelp` is the help sheet's section on what a click does where — it sits below the fold

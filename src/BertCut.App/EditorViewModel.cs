@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
-using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Windows.Threading;
 using BertCut.Core.Audio;
@@ -70,6 +69,9 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     private long? _markOut;
     private int _shuttleRate;
     private long _playbackStartFrame;
+
+    /// <summary>The transport a scrub interrupted, to be resumed when the pointer lifts.</summary>
+    private int _scrubResumeRate;
     private string _status = "Press Ctrl+O to open a video.";
     private bool _isBusy;
 
@@ -257,7 +259,6 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
             Notify();
             Notify(nameof(TransportText));
-            Notify(nameof(TransportGlyph));
         }
     }
 
@@ -277,26 +278,9 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     };
 
     /// <summary>
-    /// Transport state as a glyph for the status bar.
+    /// True while the playhead is not moving, which is which of the two middle buttons the
+    /// transport shows.
     /// </summary>
-    /// <remarks>
-    /// A cross when stopped, otherwise a chevron pointing the way the playhead is moving —
-    /// one per doubling, so 8x is four of them. The count is the readable part: at a glance
-    /// the difference between one chevron and three is obvious in a way that "2x" and "8x"
-    /// in the same small type is not.
-    /// </remarks>
-    public string TransportGlyph
-    {
-        get
-        {
-            if (ShuttleRate == 0) return "✕";
-
-            var chevrons = BitOperations.Log2((uint)Math.Abs(ShuttleRate)) + 1;
-            return new string(ShuttleRate > 0 ? '❯' : '❮', chevrons);
-        }
-    }
-
-    /// <summary>True while the playhead is not moving, which is what colours the glyph.</summary>
     public bool IsStopped => ShuttleRate == 0;
 
     public string SelectionText
@@ -1788,8 +1772,8 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     /// <remarks>
     /// Sound only at 1x forward. Reverse and 2x-8x leave the device stopped and fall back to
     /// the stopwatch below: pitch-preserving resampling for an 8x scrub is a lot of machinery
-    /// for something nobody listens to, and the transport glyph already says you are off
-    /// normal speed.
+    /// for something nobody listens to, and the lit shuttle chip and its label already say
+    /// you are off normal speed.
     /// </remarks>
     private void SyncAudioTransport()
     {
@@ -1916,6 +1900,39 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     {
         ShuttleRate = 0;
         Playhead = frame;
+    }
+
+    /// <summary>
+    /// Takes note of the transport a scrub is about to interrupt.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A drag has to stop the transport for as long as it lasts — the playhead cannot be
+    /// both under the hand and running off the clock — but stopping it is a side effect of
+    /// pointing at a frame, not an instruction to stop. Dropping the playhead somewhere
+    /// while playing carries on playing from there, which is how one watches for the moment
+    /// a cut should go: land near it, keep listening, mark it.
+    /// </para>
+    /// <para>
+    /// A press with no movement resumes too. Whether the pointer travelled is not a
+    /// distinction the user makes, and drawing it here would leave a jittered hand deciding
+    /// whether the sound came back.
+    /// </para>
+    /// </remarks>
+    public void BeginScrub() => _scrubResumeRate = ShuttleRate;
+
+    /// <summary>Picks the transport back up where the scrub found it.</summary>
+    public void EndScrub()
+    {
+        var rate = _scrubResumeRate;
+        _scrubResumeRate = 0;
+
+        if (rate == 0 || !HasMedia) return;
+
+        // Through the setter and the clock, exactly as PlayPause does: the device opens at the
+        // playhead the drag left behind, and Tick measures elapsed time from there.
+        ShuttleRate = rate;
+        RestartClock();
     }
 
     /// <summary>

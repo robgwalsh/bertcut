@@ -408,11 +408,12 @@
     <!--
         The playback controls, which live in the timecode row rather than the toolbar.
 
-        That row is exactly as tall as the timecode in it — 18 device pixels — and these
-        buttons have to fit inside that without pushing the preview up, so the height is not
-        a free parameter: 18px, and a 12.5px glyph rather than the toolbar's 17px. It is
-        small on purpose. The keys are the fast way to do all of this; the buttons are for
-        the hand that is already on the mouse.
+        Sized against the timecode beside them rather than against the toolbar: a 15px glyph
+        in a 22px chip, against the toolbar's 17px. Still small on purpose — the keys are the
+        fast way to do all of this and the buttons are for the hand already on the mouse —
+        but no longer squeezed under the timecode's own 18px, which was a constraint on the
+        row's height and was never one on how well the glyphs read. The four pixels come out
+        of the preview, which loses a scanline and does not care.
 
         Borderless, and margined symmetrically rather than trailing-only, because the whole
         cluster is centred in the row and a one-sided gutter would put it half a pixel off.
@@ -421,8 +422,8 @@
         size the ground alone is not much of a signal.
     -->
     <Style x:Key="TransportButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
-        <Setter Property="Width" Value="21" />
-        <Setter Property="Height" Value="18" />
+        <Setter Property="Width" Value="25" />
+        <Setter Property="Height" Value="22" />
         <Setter Property="Margin" Value="1,0" />
         <Setter Property="Foreground" Value="#9AA8B9" />
         <Setter Property="Background" Value="Transparent" />
@@ -431,7 +432,7 @@
                 <ControlTemplate TargetType="Button">
                     <Border x:Name="Chrome" CornerRadius="4"
                             Background="{TemplateBinding Background}">
-                        <Viewbox Width="12.5" Height="12.5"
+                        <Viewbox Width="15" Height="15"
                                  HorizontalAlignment="Center" VerticalAlignment="Center">
                             <Path x:Name="Glyph"
                                   Width="24" Height="24" Stretch="None"
@@ -459,24 +460,21 @@
         comes to this row at all — and because the six around it are the ones you can afford
         to miss.
 
-        Height is the exception it cannot have: the row is 18px and that is the whole
-        constraint this cluster was built under, so this button grows sideways instead.
-
         Its colour comes from the button rather than from here — green to start, red to
         stop — so the hover state deliberately does not touch the glyph. Lighting it to the
         usual near-white would throw away the one thing that tells the two apart at a
-        glance. Note this is the opposite assignment to the status bar's transport glyph,
-        which is red when stopped and green when moving: that reports a state, and these
-        offer an action.
+        glance. Note this is the opposite assignment to the shuttle chips either side, which
+        light green while they are the ones driving the playhead: those report a state, and
+        these two offer an action.
     -->
     <Style x:Key="TransportPrimaryButton" TargetType="Button" BasedOn="{StaticResource TransportButton}">
-        <Setter Property="Width" Value="27" />
+        <Setter Property="Width" Value="32" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
                     <Border x:Name="Chrome" CornerRadius="4"
                             Background="{TemplateBinding Background}">
-                        <Viewbox Width="16" Height="16"
+                        <Viewbox Width="19.2" Height="19.2"
                                  HorizontalAlignment="Center" VerticalAlignment="Center">
                             <Path Width="24" Height="24" Stretch="None"
                                   Data="{TemplateBinding Content}"
