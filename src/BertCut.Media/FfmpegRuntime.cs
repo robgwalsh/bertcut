@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using BertCut.Core.Export;
@@ -18,6 +19,14 @@ namespace BertCut.Media;
 /// Capabilities are feature-probed from <c>-encoders</c> and <c>-filters</c> rather than
 /// inferred from the version string, since build variants differ in what they include far
 /// more than versions do.
+/// </para>
+/// <para>
+/// Those listings answer a question about the <em>build</em>, though, and what the export
+/// needs to know is about the <em>machine</em>. One binary serves every user, so it names
+/// NVENC, Quick Sync, AMF and <c>cuda</c> whatever card is fitted. Anything hardware-dependent
+/// is therefore confirmed by use — see <see cref="ProbeHardware"/> — and dropped when it does
+/// not work, so <see cref="EncoderCapabilities.SelectVideoEncoder"/> falls through to the next
+/// choice instead of picking an encoder that cannot run.
 /// </para>
 /// </remarks>
 public sealed partial class FfmpegRuntime
@@ -69,10 +78,17 @@ public sealed partial class FfmpegRuntime
 
             var encoders = ParseNames(TryRun(exe, ["-hide_banner", "-encoders"]) ?? "");
             var filters = ParseNames(TryRun(exe, ["-hide_banner", "-filters"]) ?? "");
-            var hasCuda = (TryRun(exe, ["-hide_banner", "-hwaccels"]) ?? "").Contains("cuda", StringComparison.Ordinal);
+            var listsCuda = (TryRun(exe, ["-hide_banner", "-hwaccels"]) ?? "").Contains("cuda", StringComparison.Ordinal);
+
+            // Anything hardware-dependent that did not prove itself comes back out of the set,
+            // including the ones the probe never reached — an unprobed encoder is an unknown
+            // one, and claiming it is exactly the mistake this exists to stop.
+            var hardware = ProbeHardware(exe, encoders, listsCuda);
+            encoders.ExceptWith(HardwareH264Encoders.Where(n => !hardware.WorkingEncoders.Contains(n)));
 
             var version = banner.Split('\n')[0].Trim();
-            return new FfmpegRuntime(candidate, version, new EncoderCapabilities(encoders, filters, hasCuda));
+            return new FfmpegRuntime(
+                candidate, version, new EncoderCapabilities(encoders, filters, hardware.CudaDecode));
         }
 
         throw new FileNotFoundException(
@@ -191,6 +207,116 @@ public sealed partial class FfmpegRuntime
         catch (Exception e) when (e is System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException)
         {
             return null;
+        }
+    }
+
+    /// <summary>
+    /// The H.264 encoders that need a particular piece of hardware behind them, in the order
+    /// <see cref="EncoderCapabilities.SelectVideoEncoder"/> prefers them.
+    /// </summary>
+    private static readonly string[] HardwareH264Encoders = ["h264_nvenc", "h264_qsv", "h264_amf"];
+
+    /// <summary>
+    /// Keyed by ffmpeg path, because the answer is a property of this machine and cannot change
+    /// while the process runs. Without it every <see cref="Locate"/> — one per test fixture —
+    /// would pay for the probe again.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, HardwareProbe> ProbeCache =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>What this machine's hardware will actually do, as opposed to what ffmpeg lists.</summary>
+    private sealed record HardwareProbe(IReadOnlySet<string> WorkingEncoders, bool CudaDecode);
+
+    /// <summary>
+    /// Narrows the listed capabilities to the ones that work here, by using them.
+    /// </summary>
+    /// <remarks>
+    /// This is the difference between a build's features and a machine's. BtbN ships one binary
+    /// for everyone, so <c>-encoders</c> names <c>h264_nvenc</c>, <c>h264_qsv</c> and
+    /// <c>h264_amf</c>, and <c>-hwaccels</c> names <c>cuda</c>, on a machine with none of them —
+    /// those listings report what was compiled in and nothing else. Selecting from them directly
+    /// picked NVENC everywhere and exported successfully only on a machine that happened to have
+    /// an NVIDIA card; anywhere else every export died at <c>Cannot load nvcuda.dll</c>, and the
+    /// GitHub runner was the first machine without one to try it.
+    /// </remarks>
+    private static HardwareProbe ProbeHardware(string exe, IReadOnlySet<string> listed, bool listsCuda) =>
+        ProbeCache.GetOrAdd(exe, _ =>
+        {
+            var working = new HashSet<string>(StringComparer.Ordinal);
+
+            // Preference order, and it stops at the first that works: SelectVideoEncoder would
+            // never reach the ones behind it, so probing them is startup latency spent on an
+            // answer nothing reads. Each probe launches ffmpeg — around 300 ms for one that
+            // succeeds, under 150 ms for one that fails at device initialisation.
+            foreach (var encoder in HardwareH264Encoders)
+            {
+                if (!listed.Contains(encoder) || !EncodesAFrame(exe, encoder)) continue;
+
+                working.Add(encoder);
+                break;
+            }
+
+            return new HardwareProbe(working, listsCuda && CudaDeviceOpens(exe));
+        });
+
+    /// <summary>
+    /// Whether <paramref name="encoder"/> can encode a frame here. 256x256 clears every
+    /// hardware encoder's minimum dimensions; the failures are the fast case, since a missing
+    /// device fails at initialisation rather than after any work.
+    /// </summary>
+    private static bool EncodesAFrame(string exe, string encoder) => RunSucceeds(exe,
+    [
+        "-hide_banner", "-loglevel", "error", "-nostdin",
+        "-f", "lavfi", "-i", "color=c=black:s=256x256:r=25:d=0.04",
+        "-c:v", encoder, "-frames:v", "1", "-f", "null", "-",
+    ]);
+
+    /// <summary>
+    /// Whether a CUDA device opens here — which is what <c>-hwaccel cuda</c> needs and what
+    /// <c>-hwaccels</c> listing it does not promise.
+    /// </summary>
+    private static bool CudaDeviceOpens(string exe) => RunSucceeds(exe,
+    [
+        "-hide_banner", "-loglevel", "error", "-nostdin",
+        "-init_hw_device", "cuda",
+        "-f", "lavfi", "-i", "color=c=black:s=64x64:r=25:d=0.04",
+        "-frames:v", "1", "-f", "null", "-",
+    ]);
+
+    /// <summary>Runs ffmpeg and reports whether it exited cleanly, discarding its output.</summary>
+    private static bool RunSucceeds(string exe, string[] args)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo(exe)
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+
+            foreach (var a in args) psi.ArgumentList.Add(a);
+
+            using var process = Process.Start(psi);
+            if (process is null) return false;
+
+            // Drained before the wait: -loglevel error keeps this to a line or two, but a full
+            // pipe would block the child rather than the probe returning false.
+            process.StandardOutput.ReadToEnd();
+            process.StandardError.ReadToEnd();
+
+            if (!process.WaitForExit(20_000))
+            {
+                try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { /* already gone */ }
+                return false;
+            }
+
+            return process.ExitCode == 0;
+        }
+        catch (Exception e) when (e is System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException)
+        {
+            return false;
         }
     }
 

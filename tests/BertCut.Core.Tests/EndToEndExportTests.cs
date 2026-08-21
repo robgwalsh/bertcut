@@ -380,4 +380,54 @@ public class EndToEndExportTests : IDisposable
         Assert.Equal(keyA, keyMoved);
         Assert.NotEqual(keyA, keyB);
     }
+
+    /// <summary>
+    /// A render export must work with no hardware encoder at all — the configuration every
+    /// machine without an NVIDIA card is in, which until the capability probe learned to
+    /// confirm hardware by using it was every machine but the development one.
+    /// </summary>
+    /// <remarks>
+    /// Pinned rather than taken from the runtime so it runs the same way on a machine that
+    /// does have a card. Without it this path is exercised only where it is already broken.
+    /// </remarks>
+    [SkippableFact]
+    public async Task A_render_export_works_with_no_hardware_encoder()
+    {
+        Skip.If(_runtime is null, "No FFmpeg 8+ build found.");
+
+        var cpuOnly = new EncoderCapabilities(
+            new HashSet<string>(_runtime!.Capabilities.Encoders.Where(IsSoftware), StringComparer.Ordinal),
+            _runtime.Capabilities.Filters,
+            HasCudaHwaccel: false);
+
+        Assert.Equal(VideoEncoder.Libopenh264, cpuOnly.SelectVideoEncoder());
+
+        var source = MakeSource("cpu.mp4", seconds: 6);
+        var probe = await new MediaProber(_runtime).ProbeAsync(source);
+
+        var project = TimelineEdits.ImportSource(
+            Project.Empty(new OutputFormat(640, 480, Rational.FromInt(30))),
+            probe.Media);
+
+        // A crop forces the render path; a copy would never reach an encoder at all.
+        project = TimelineEdits.SetCrop(project, new FrameRange(30, 90), new RectI(100, 80, 320, 240));
+
+        var output = Path.Combine(_dir, "out-cpu.mp4");
+        var plan = ExportPlanner.Plan(
+            project, new ExportSettings(output), cpuOnly, _ => probe.Index, _dir);
+
+        Assert.Equal(ExportMode.Render, plan.Mode);
+
+        await new ExportRunner(_runtime).RunAsync(plan, _dir);
+
+        Assert.True(File.Exists(output), "export produced no file");
+        Assert.Equal("h264", CodecOf(output, "v:0"));
+        Assert.InRange(DurationOf(output), 5.8, 6.2);
+    }
+
+    /// <summary>Encoders that need nothing but a CPU.</summary>
+    private static bool IsSoftware(string encoder) =>
+        !encoder.Contains("nvenc", StringComparison.Ordinal)
+        && !encoder.Contains("qsv", StringComparison.Ordinal)
+        && !encoder.Contains("amf", StringComparison.Ordinal);
 }
