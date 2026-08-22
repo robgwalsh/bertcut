@@ -306,9 +306,15 @@ directory would survive exactly until the next update.
 The package is `RobWalsh.BertCut`, published in
 [`microsoft/winget-pkgs`](https://github.com/microsoft/winget-pkgs).
 
-**This is automated.** The `winget` job in `release.yml` runs after the release is published and
-opens a pull request at `microsoft/winget-pkgs` for the new version. Nothing to do by hand; the PR
+**This is automated from the second version on.** The `winget` job in `release.yml` runs after the
+release is published and opens a pull request at `microsoft/winget-pkgs` for the new version. The PR
 is merged by winget's own validation pipeline, usually within a few hours.
+
+**The first version is not**, because the action updates an existing package rather than creating
+one: with nothing upstream to build from it fails with `Package RobWalsh.BertCut does not exist in
+the winget-pkgs repository`, which is what happened on v0.1.0. Submit that one by hand — the
+manifests as sent are kept in `manifests/r/RobWalsh/BertCut/`, and `winget validate --manifest <dir>`
+checks them before they go.
 
 The job needs two things:
 

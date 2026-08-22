@@ -81,6 +81,12 @@ jobs:
   # there is the template for every version after it - a wrong installer type or a stale URL
   # propagates rather than being corrected. See docs/build-and-release.md.
   # Needs a classic PAT with public_repo (secret WINGET_PAT) and a winget-pkgs fork on the account.
+  #
+  # It also needs the package to already exist upstream: with nothing to build from it fails with
+  # "Package RobWalsh.BertCut does not exist in the winget-pkgs repository", which is exactly what
+  # v0.1.0 did. The first version is submitted by hand - manifests/r/RobWalsh/BertCut/ holds what
+  # was sent - and this job takes over from the second.
+  #
   # A failure here does not affect the release itself; it can be re-run, or submitted by hand.
   winget:
     needs: release
@@ -91,5 +97,4 @@ jobs:
           identifier: RobWalsh.BertCut
           installers-regex: 'Setup\.exe$'
           release-tag: ${{ github.ref_name }}
-          release-notes-url: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}
           token: ${{ secrets.WINGET_PAT }}

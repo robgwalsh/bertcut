@@ -43,7 +43,7 @@ src/BertCut.Core     timeline model, edits, export planner, audio correlation
 src/BertCut.Media    ffmpeg decode, probing, preview compositing, audio playback,
                      export process driving
 src/BertCut.App      WPF shell, timeline, settings screen
-tests/               206 tests; the ffmpeg-dependent ones skip if it isn't installed
+tests/               303 tests; the ffmpeg-dependent ones skip if it isn't installed
 ```
 
 `Core` deliberately depends on nothing but the BCL, so ripple-delete arithmetic, the
