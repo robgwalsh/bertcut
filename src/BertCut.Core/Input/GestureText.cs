@@ -5,7 +5,7 @@ namespace BertCut.Core.Input;
 /// </summary>
 /// <remarks>
 /// This lives in Core rather than in the shell because three surfaces have to agree on it —
-/// the help sheet, the Controls page, and every toolbar tooltip — and a keycap that says
+/// the Controls page, the restore notice, and every toolbar tooltip — and a keycap that says
 /// something different from the key the dispatcher answers to is worse than no keycap.
 /// </remarks>
 public static class GestureText

@@ -29,7 +29,15 @@ public sealed record ProjectDocument
     /// <summary>Crops as [start, end, x, y, w, h].</summary>
     public List<long[]> Crops { get; init; } = [];
 
-    /// <summary>Overlays as [start, end, sourceId, sourceStart, x, y, w, h, muted].</summary>
+    /// <summary>
+    /// Overlays as [start, end, sourceId, sourceStart, x, y, w, h, muted] and, for a clip
+    /// showing a cut-out region rather than the whole source, four more: [sx, sy, sw, sh].
+    /// </summary>
+    /// <remarks>
+    /// Appended rather than versioned. A row is read by its length, so a session written
+    /// before cut-outs existed still loads — and one written after loads in an older build
+    /// as the whole-source clip it very nearly is, rather than as a file it refuses.
+    /// </remarks>
     public List<long[]> Overlays { get; init; } = [];
 }
 
@@ -144,11 +152,18 @@ public static class SessionStore
         Base = [.. p.Base.Select(b => new[] { b.LengthFrames, b.SourceId, b.SourceStartFrame })],
         Crops = [.. p.Crops.Select(c => new long[]
             { c.Range.Start, c.Range.End, c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H })],
-        Overlays = [.. p.Overlays.Select(o => new long[]
-        {
-            o.Range.Start, o.Range.End, o.SourceId, o.SourceStartFrame,
-            o.Dest.X, o.Dest.Y, o.Dest.W, o.Dest.H, o.Muted ? 1 : 0,
-        })],
+        Overlays = [.. p.Overlays.Select(o => o.Src is { } src
+            ? new long[]
+            {
+                o.Range.Start, o.Range.End, o.SourceId, o.SourceStartFrame,
+                o.Dest.X, o.Dest.Y, o.Dest.W, o.Dest.H, o.Muted ? 1 : 0,
+                src.X, src.Y, src.W, src.H,
+            }
+            : new long[]
+            {
+                o.Range.Start, o.Range.End, o.SourceId, o.SourceStartFrame,
+                o.Dest.X, o.Dest.Y, o.Dest.W, o.Dest.H, o.Muted ? 1 : 0,
+            })],
     };
 
     internal static Project FromDocument(ProjectDocument d)
@@ -180,7 +195,9 @@ public static class SessionStore
         var overlays = d.Overlays
             .Select(o => new OverlayClip(
                 new FrameRange(o[0], o[1]), (int)o[2], o[3],
-                new RectI((int)o[4], (int)o[5], (int)o[6], (int)o[7]), o[8] != 0))
+                new RectI((int)o[4], (int)o[5], (int)o[6], (int)o[7]),
+                o.Length >= 13 ? new RectI((int)o[9], (int)o[10], (int)o[11], (int)o[12]) : null,
+                o[8] != 0))
             .ToImmutableArray();
 
         return new Project(output, sources, segments.ToImmutable(), crops, overlays);

@@ -8,7 +8,7 @@ namespace BertCut.Harness;
 /// <remarks>
 /// The inverse of <see cref="GestureText"/>, and deliberately generous about it: a script
 /// should be able to say <c>Ctrl+Z</c>, <c>ctrl + z</c>, <c>Del</c> or <c>Delete</c> and mean
-/// the same key. It accepts every label the help sheet prints, including the arrows and the
+/// the same key. It accepts every label the Controls page prints, including the arrows and the
 /// <c>&lt;</c>/<c>&gt;</c> the frame-step keys are shown as, so a gesture can be copied
 /// straight off a screenshot into a script.
 /// </remarks>

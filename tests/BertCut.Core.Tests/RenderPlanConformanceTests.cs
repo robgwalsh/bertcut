@@ -132,7 +132,7 @@ public class RenderPlanConformanceTests
                     break;
 
                 case 1:
-                    p = TimelineEdits.SetCrop(p, range, RandomAspectLockedCrop(rng, p.Output));
+                    p = TimelineEdits.SetCrop(p, range, RandomCrop(rng, p.Output));
                     break;
 
                 case 2:
@@ -167,15 +167,15 @@ public class RenderPlanConformanceTests
     /// Produces a crop matching the output aspect exactly, as the aspect-locked drag
     /// handle in the UI will.
     /// </summary>
-    private static RectI RandomAspectLockedCrop(Random rng, OutputFormat output)
+    /// <summary>
+    /// A crop of any shape, which is the only kind there is: the two edges are independent
+    /// and the only rule left is that both are even.
+    /// </summary>
+    private static RectI RandomCrop(Random rng, OutputFormat output)
     {
-        var unitW = output.GcdWidth;
-        var unitH = output.GcdHeight;
-        var maxScale = Math.Min(output.Width / unitW, output.Height / unitH);
-        var scale = rng.Next(Math.Max(1, maxScale / 4), maxScale + 1);
+        var w = rng.Next(output.Width / 4, output.Width + 1) & ~1;
+        var h = rng.Next(output.Height / 4, output.Height + 1) & ~1;
 
-        var w = unitW * scale;
-        var h = unitH * scale;
         return new RectI(rng.Next(0, output.Width - w + 1), rng.Next(0, output.Height - h + 1), w, h);
     }
 }

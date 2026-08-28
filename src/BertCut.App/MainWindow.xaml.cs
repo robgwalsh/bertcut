@@ -29,7 +29,7 @@ public partial class MainWindow : Window
     /// <remarks>
     /// Loaded from disk rather than taken from <see cref="KeyMap"/>, and replaced wholesale
     /// when the Controls page changes something. Everything that prints a key — the
-    /// tooltips, the help sheet, the hint over an empty preview — is rebuilt from this, so
+    /// tooltips, the hint over an empty preview — is rebuilt from this, so
     /// there is exactly one answer in the app to "what does this key do".
     /// </remarks>
     private KeyBindings _keys = KeyBindingStore.Load();
@@ -95,14 +95,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (HelpOverlay.Visibility == Visibility.Visible
-            && e.Key is Key.Escape or Key.F1)
-        {
-            HideHelp();
-            e.Handled = true;
-            return;
-        }
-
         var key = WpfKeys.Translate(e);
         if (key == EditorKey.None) return;
 
@@ -144,7 +136,6 @@ public partial class MainWindow : Window
             case EditorIntent.ChooseOverlayFile: ChooseOverlayFile(); break;
             case EditorIntent.AppendSource: AppendFile(); break;
             case EditorIntent.Export: _ = ExportAsync(); break;
-            case EditorIntent.ToggleHelp: ToggleHelp(); break;
             case EditorIntent.ToggleSettings: ToggleSettings(); break;
             default: _model.Dispatch(intent); break;
         }
@@ -348,36 +339,6 @@ public partial class MainWindow : Window
         EmptyHint.Visibility = Visibility.Visible;
     }
 
-    private void OnHelpCloseClick(object sender, RoutedEventArgs e) => HideHelp();
-
-    /// <summary>Closes the sheet when the dimmed area around it is clicked, not the sheet itself.</summary>
-    private void OnHelpBackdropClick(object sender, MouseButtonEventArgs e)
-    {
-        if (ReferenceEquals(e.OriginalSource, HelpOverlay)) HideHelp();
-    }
-
-    private void ToggleHelp()
-    {
-        if (HelpOverlay.Visibility == Visibility.Visible) HideHelp();
-        else ShowHelp();
-    }
-
-    private void ShowHelp()
-    {
-        HideSettings();
-        HelpOverlay.Visibility = Visibility.Visible;
-
-        // The sheet lifts in rather than appearing. It costs a quarter of a second and it
-        // is the difference between a panel and a thing that opened.
-        if (TryFindResource("HelpIn") is Storyboard entrance) entrance.Begin(this);
-    }
-
-    private void HideHelp()
-    {
-        HelpOverlay.Visibility = Visibility.Collapsed;
-        Keyboard.Focus(this);
-    }
-
     // ---- the overlay source card -------------------------------------------------------
 
     /// <summary>
@@ -417,7 +378,6 @@ public partial class MainWindow : Window
               + $"{_model.Project.Base.Length}, whole."
             : "No segment selected — click one on the track first.";
 
-        HideHelp();
         HideSettings();
         OverlaySourceOverlay.Visibility = Visibility.Visible;
 
@@ -472,7 +432,7 @@ public partial class MainWindow : Window
 
         RestoreToast.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, Ms(170)));
 
-        // Rises as it fades in, the same way the help sheet and the Controls page do. A
+        // Rises as it fades in, the same way the Controls page does. A
         // panel that simply exists reads as something that was always there and missed.
         Lift(RestoreToast).BeginAnimation(
             TranslateTransform.YProperty,
@@ -520,7 +480,7 @@ public partial class MainWindow : Window
     /// <remarks>
     /// <para>
     /// Screenshots are otherwise a sample of a 260 ms cubic ease, and two runs of the same
-    /// script disagree about the opacity of the help sheet. Removing an animation reverts the
+    /// script disagree about the opacity of the Controls page. Removing an animation reverts the
     /// property to its base value, which for all of these is exactly the value the storyboard
     /// was travelling towards.
     /// </para>
@@ -532,9 +492,6 @@ public partial class MainWindow : Window
     /// </remarks>
     internal void SettleAnimations()
     {
-        HelpCard.BeginAnimation(OpacityProperty, null);
-        Lift(HelpCard).BeginAnimation(TranslateTransform.YProperty, null);
-
         Settings.BeginAnimation(OpacityProperty, null);
         Lift(Settings).BeginAnimation(TranslateTransform.YProperty, null);
 
@@ -555,8 +512,6 @@ public partial class MainWindow : Window
 
     private void ShowSettings()
     {
-        HelpOverlay.Visibility = Visibility.Collapsed;
-
         Settings.Open(_keys);
         SettingsOverlay.Visibility = Visibility.Visible;
 
@@ -608,7 +563,6 @@ public partial class MainWindow : Window
     /// <summary>Rebuilds everything in the shell that prints a key.</summary>
     private void ApplyBindings()
     {
-        BuildHelp();
         BuildToolTips();
 
         // After BuildToolTips, which would otherwise overwrite this button's tooltip with
@@ -623,10 +577,7 @@ public partial class MainWindow : Window
             + $"{Gesture(EditorIntent.BeginOverlay)} overlays a clip\n"
             + $"{Gesture(EditorIntent.PlayPause)} plays · "
             + $"{Gesture(EditorIntent.StepBack)} {Gesture(EditorIntent.StepForward)} step a frame · "
-            + $"{Gesture(EditorIntent.Undo)} undoes\n"
-            + $"{Gesture(EditorIntent.ToggleHelp)} for all shortcuts";
-
-        HintLabel.Text = $"{Gesture(EditorIntent.ToggleHelp)} shortcuts";
+            + $"{Gesture(EditorIntent.Undo)} undoes";
     }
 
     private string Gesture(EditorIntent intent) => _keys.GestureFor(intent);
@@ -780,23 +731,25 @@ public partial class MainWindow : Window
     /// </remarks>
     private void ApplyPreviewSize()
     {
-        var output = _model.Project.Output;
-        if (output.Width <= 0 || output.Height <= 0) return;
+        // The canvas rather than the output: a crop covering the whole timeline is delivered
+        // at its own size, and the preview composites the picture that comes out.
+        var (canvasWidth, canvasHeight) = _model.CanvasSize;
+        if (canvasWidth <= 0 || canvasHeight <= 0) return;
         if (PreviewPane.ActualWidth <= 0 || PreviewPane.ActualHeight <= 0) return;
 
         // Stretch="Uniform", so the picture fits the tighter of the two axes.
         var dpi = VisualTreeHelper.GetDpi(this);
         var scale = Math.Min(
-            PreviewPane.ActualWidth * dpi.DpiScaleX / output.Width,
-            PreviewPane.ActualHeight * dpi.DpiScaleY / output.Height);
+            PreviewPane.ActualWidth * dpi.DpiScaleX / canvasWidth,
+            PreviewPane.ActualHeight * dpi.DpiScaleY / canvasHeight);
 
         if (scale <= 0) return;
 
         var divisor = Math.Clamp((int)Math.Ceiling(1 / scale), 1, MaxPreviewDivisor);
 
         _model.SetRenderSize(
-            Math.Max(1, output.Width / divisor),
-            Math.Max(1, output.Height / divisor));
+            Math.Max(1, canvasWidth / divisor),
+            Math.Max(1, canvasHeight / divisor));
     }
 
     /// <summary>
@@ -832,6 +785,12 @@ public partial class MainWindow : Window
         ShuttleReverseButton.Foreground = _model.ShuttleRate < 0 ? MovingBrush : IdleChipBrush;
         ShuttleForwardButton.Foreground = _model.ShuttleRate > 0 ? MovingBrush : IdleChipBrush;
 
+        // Whether there is an overlay to line up depends on the mode, the playhead and the
+        // document — three properties rather than one, and the playhead moves every frame
+        // anyway, so this is assigned unconditionally like the two above rather than watched
+        // for on a name.
+        SyncOverlayButton.IsEnabled = _model.CanSyncOverlayAudio;
+
         // Unlike the transport, this changes only when the key is pressed, so it is worth the
         // property check: swapping a Geometry every frame of playback would be work for
         // nothing.
@@ -843,7 +802,9 @@ public partial class MainWindow : Window
 
         // A new video brings its own output format, and the divisor is relative to it. The
         // pane's own size has not changed, so nothing else would ask.
-        if (e.PropertyName is nameof(EditorViewModel.Project)) ApplyPreviewSize();
+        // CanvasSize, not Project: entering crop mode takes the existing crop off the preview,
+        // which changes the shape being composited without changing the document.
+        if (e.PropertyName is nameof(EditorViewModel.CanvasSize)) ApplyPreviewSize();
     }
 
     /// <summary>
@@ -888,30 +849,10 @@ public partial class MainWindow : Window
         return brush;
     }
 
-    /// <summary>
-    /// Fills the shortcut reference from the key map the dispatcher answers to.
-    /// </summary>
-    /// <remarks>
-    /// Generated rather than written out, which is what stops the sheet drifting from the
-    /// keys — including away from the user's own changes to them.
-    /// </remarks>
-    private void BuildHelp() =>
-        HelpList.ItemsSource = _keys.ForHelp()
-            .Select(group => new HelpGroup(
-                group.Key,
-                group.Select(b => new { Gesture = GestureText.Format(b), b.Description })))
-            .ToList();
-
     protected override void OnClosing(CancelEventArgs e)
     {
         _model.FlushSession();
         _model.Dispose();
         base.OnClosing(e);
     }
-}
-
-/// <summary>A named group of bindings for the shortcut sheet.</summary>
-public sealed class HelpGroup(string key, IEnumerable<object> items) : List<object>(items)
-{
-    public string Key { get; } = key;
 }

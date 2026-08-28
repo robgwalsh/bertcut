@@ -98,10 +98,22 @@ public enum EditorIntent
     NudgeLeft, NudgeRight, NudgeUp, NudgeDown,
 
     /// <summary>
-    /// Resize the pending rectangle. Both crop and overlay rectangles are aspect-locked,
-    /// so resizing is a single dimension — one pair of keys rather than four.
+    /// Resize the pending rectangle: one pair of keys rather than four. An overlay's box
+    /// keeps the ratio of the picture going into it; a crop is free-shaped, and both of its
+    /// edges scale together.
     /// </summary>
     Grow, Shrink,
+
+    /// <summary>
+    /// Take the region drawn in crop mode and lay it back over the video instead of cropping
+    /// to it — the same rectangle, answering the other question it could have answered.
+    /// </summary>
+    /// <remarks>
+    /// It hands over to <see cref="EditorMode.Overlay"/> rather than committing anything, so
+    /// the where is still asked separately from the what: the region is now the clip's
+    /// content, and the box that follows is where on the frame it lands.
+    /// </remarks>
+    OverlayRegion,
 
     SnapTopLeft, SnapTopRight, SnapBottomLeft, SnapBottomRight, SnapCenter,
 
@@ -142,10 +154,10 @@ public enum EditorIntent
     AppendSource,
 
     ZoomIn, ZoomOut, ZoomToFit,
-    ToggleHelp, ToggleSettings,
+    ToggleSettings,
 }
 
-/// <summary>One binding, for both dispatch and the on-screen cheat sheet.</summary>
+/// <summary>One binding, for both dispatch and the Controls page.</summary>
 public sealed record KeyBinding(
     EditorKey Key,
     EditorModifiers Modifiers,
@@ -222,6 +234,11 @@ public static class KeyMap
         .. PlacementBindings(EditorMode.Crop, "Apply the crop"),
         .. PlacementBindings(EditorMode.Overlay, "Place the overlay"),
 
+        // The second thing a drawn region can be. Enter keeps it and throws the rest of the
+        // frame away; this keeps the frame and lays the region back over it.
+        new(EditorKey.O, EditorModifiers.None, EditorMode.Crop, EditorIntent.OverlayRegion,
+            "Overlay this region onto the video instead of cropping to it"),
+
         // Saying what to overlay. Three rows on a card, and the digits printed on them.
         new(EditorKey.D1, EditorModifiers.None, EditorMode.OverlaySource, EditorIntent.ChooseOverlayMarkedRange, "Overlay the marked range"),
         new(EditorKey.D2, EditorModifiers.None, EditorMode.OverlaySource, EditorIntent.ChooseOverlaySegment, "Overlay the selected segment"),
@@ -250,7 +267,6 @@ public static class KeyMap
         new(EditorKey.Equals, EditorModifiers.None, EditorMode.Normal, EditorIntent.ZoomIn, "Zoom in"),
         new(EditorKey.Minus, EditorModifiers.None, EditorMode.Normal, EditorIntent.ZoomOut, "Zoom out"),
         new(EditorKey.Backslash, EditorModifiers.None, EditorMode.Normal, EditorIntent.ZoomToFit, "Zoom to fit"),
-        new(EditorKey.F1, EditorModifiers.None, EditorMode.Normal, EditorIntent.ToggleHelp, "Show / hide shortcuts"),
         new(EditorKey.Comma, EditorModifiers.Control, EditorMode.Normal, EditorIntent.ToggleSettings, "Settings"),
     ];
 
@@ -258,9 +274,10 @@ public static class KeyMap
     /// The keys shared by crop and overlay placement.
     /// </summary>
     /// <remarks>
-    /// Both rectangles are aspect-locked — a crop to the output ratio so zoom-to-fill
-    /// never needs a pad, an overlay to its own source so the picture is never stretched —
-    /// which collapses resizing from four directions to one grow/shrink pair.
+    /// An overlay's box is locked to the ratio of the picture going into it, so that picture
+    /// is never stretched, and Shift+↑/↓ is therefore one dimension rather than four. A crop
+    /// is free-shaped and the same pair scales both of its edges at once; reshaping one edge
+    /// alone is a corner handle, which is a thing the keyboard has never had.
     /// </remarks>
     private static KeyBinding[] PlacementBindings(EditorMode mode, string commitDescription) =>
     [
@@ -287,11 +304,8 @@ public static class KeyMap
     public static EditorIntent Resolve(EditorKey key, EditorModifiers modifiers, EditorMode mode) =>
         KeyBindings.Default.Resolve(key, modifiers, mode);
 
-    /// <summary>Default bindings grouped for the cheat sheet, in presentation order.</summary>
-    public static IEnumerable<IGrouping<string, KeyBinding>> ForHelp() => KeyBindings.Default.ForHelp();
-
     /// <summary>
-    /// Which section of the help sheet and the Controls page a binding belongs to.
+    /// Which section of the Controls page a binding belongs to.
     /// </summary>
     /// <remarks>
     /// Mode does the first cut: everything bound inside a placement mode is about moving a

@@ -185,6 +185,13 @@ public static class ExportPlanner
         var tempFiles = new List<string>();
         var segmentFiles = new List<string>();
 
+        // What comes out is not always the output format: a crop covering the whole timeline
+        // is delivered at its own size, so a free-shaped reframe is neither padded nor
+        // stretched. Every segment carries that same crop, so every segment scales to the
+        // same size and the concat that joins them still has one stream description.
+        var (deliveredWidth, deliveredHeight) = project.DeliveredSize;
+        var delivered = project.Output with { Width = deliveredWidth, Height = deliveredHeight };
+
         for (var i = 0; i < plan.Count; i++)
         {
             var segment = plan[i];
@@ -210,7 +217,7 @@ public static class ExportPlanner
                 FfmpegArgs.RenderSegment(
                     segment,
                     new SegmentTiming(start, end, overlayStart),
-                    project.Output,
+                    delivered,
                     source.Path,
                     overlayPath,
                     encoder,

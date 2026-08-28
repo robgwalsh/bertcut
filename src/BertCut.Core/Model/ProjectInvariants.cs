@@ -68,11 +68,11 @@ public static class ProjectInvariants
             if (rect.X < 0 || rect.Y < 0 || rect.Right > p.Output.Width || rect.Bottom > p.Output.Height)
                 return $"crops[{i}] rect {rect} falls outside the {p.Output.Width}x{p.Output.Height} output";
 
-            // Aspect lock: the crop must match the output ratio exactly, so zoom-to-fill
-            // never needs a pad. Cross-multiplied to stay in integers.
-            if ((long)rect.W * p.Output.Height != (long)rect.H * p.Output.Width)
-                return $"crops[{i}] rect {rect} does not match the output aspect ratio " +
-                       $"{p.Output.GcdWidth}:{p.Output.GcdHeight}";
+            // A crop may be any shape, but not any size: ffmpeg's crop filter fails outright
+            // on an odd dimension with yuv420p, and a whole-timeline crop's size becomes the
+            // delivered one, where an odd dimension fails again in the encoder.
+            if (rect.W % 2 != 0 || rect.H % 2 != 0)
+                return $"crops[{i}] rect {rect} has an odd dimension";
         }
 
         var overlayError = ValidateSpans(
@@ -88,6 +88,21 @@ public static class ProjectInvariants
                 return $"overlays[{i}] has negative source start {clip.SourceStartFrame}";
             if (clip.Dest.W <= 0 || clip.Dest.H <= 0)
                 return $"overlays[{i}] has non-positive destination size {clip.Dest}";
+
+            // A cut-out region is in the source's own pixels, so this is the one rectangle
+            // checked against the footage rather than against the frame it lands on.
+            if (clip.Src is { } src)
+            {
+                var media = p.RequireSource(clip.SourceId);
+
+                if (src.W <= 0 || src.H <= 0)
+                    return $"overlays[{i}] has non-positive source region {src}";
+                if (src.W % 2 != 0 || src.H % 2 != 0)
+                    return $"overlays[{i}] source region {src} has an odd dimension";
+                if (src.X < 0 || src.Y < 0 || src.Right > media.Width || src.Bottom > media.Height)
+                    return $"overlays[{i}] source region {src} falls outside the " +
+                           $"{media.Width}x{media.Height} source";
+            }
         }
 
         return null;

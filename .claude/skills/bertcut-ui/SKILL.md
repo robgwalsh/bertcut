@@ -79,6 +79,19 @@ drag-segment <from> <to>    drag that segment along the track, which reorders th
                             through the drag threshold rather than around it.
 scrub <frame>               click the ruler above the track — seeks and deselects, which is
                             the only way to test that clicking off a clip lets go of it
+draw-rect <x0> <y0> <x1> <y1> [shift]
+                            drag a new crop or overlay box out on the preview, in canvas
+                            pixels. The only gesture that gives a box a shape of its own —
+                            the keyboard moves and scales one but never reshapes it — so a
+                            free-shaped crop is unreachable without it. The press has to land
+                            outside the box already there, or it moves that one instead.
+                            A trailing `shift` holds the key down for the whole drag, which
+                            snaps a crop to the video's own ratio.
+drag-rect-corner <x0> <y0> <x1> <y1> [shift]
+                            grab the corner nearest <x0>,<y0> and drag it to <x1>,<y1>. What
+                            reshapes one edge and leaves the other; a locked box answers by
+                            keeping its ratio, a crop by doing as it is told — unless `shift`
+                            is held, which lends it the video's.
 goto <frame> | play | stop | tick [n] | sleep <ms> | reset | close | settle [ms]
 shot <name> [element]       PNG of the window, or of any x:Name'd element
 dump-preview <name>.png     the composited video frame alone, no interface around it
@@ -93,6 +106,15 @@ assert-overlay-source-start <a> [b]   where the overlay in question reads from i
                                       clip being placed must never change it
 assert-overlay-start <a> [b] | assert-overlay-end <a> [b]
                                       what it covers on the timeline
+assert-crop <WxH+X+Y>                 the shape of the box being drawn, or of the crop over
+                                      the playhead. A crop may be any shape now, and nothing
+                                      else in a run would show one that had quietly snapped
+                                      back to the output's ratio
+assert-overlay-src <WxH+X+Y>|none     the region the clip cuts out of its source, in that
+                                      source's own pixels
+assert-delivered <WxH>                the size the finished picture comes out at, which a
+                                      crop covering the whole timeline changes and a crop
+                                      over part of it does not
 assert-overlay-selected [index] | assert-no-overlay-selected | assert-overlays <n>
 assert-segment-selected [index] | assert-no-segment-selected | assert-segments <n>
 assert-marks <in> <out> | assert-no-marks
@@ -126,11 +148,7 @@ Element names come straight from `MainWindow.xaml`: `Toolbar`, `ClearButton`, `R
 `PreviewImage`, `EmptyHint`, `Placement`, `RestoreToast`, `TransportRow`, `TransportControls`,
 `PlayButton`, `StopButton`, `ShuttleReverseButton`, `ShuttleForwardButton`, `MuteButton`,
 `TimecodeLabel`, `SelectionLabel`, `TransportLabel`,
-`Timeline`, `StatusLabel`, `HintLabel`, `HelpOverlay`, `HelpCard`, `HelpList`,
-`StripHelp`, `SettingsOverlay`, `Settings`.
-
-`StripHelp` is the help sheet's section on what a click does where — it sits below the fold
-of a sheet a script cannot scroll, so capture it on its own: `shot strip StripHelp`.
+`Timeline`, `StatusLabel`, `SettingsOverlay`, `Settings`.
 
 **A run makes no sound** unless you pass `--audio`. The harness injects a null sink, so the
 whole playback path still runs — decoders, segment boundaries, the clock the playhead follows
@@ -162,7 +180,7 @@ Export is already covered headlessly by `EndToEndExportTests`.
 **An overlay, settled**
 
 ```powershell
-& $harness -c "intent ToggleHelp; assert-visible HelpOverlay; shot help"
+& $harness -c "intent ToggleSettings; assert-visible SettingsOverlay; shot settings"
 ```
 
 `settle` runs automatically after every command, which waits out the ffprobe behind an open

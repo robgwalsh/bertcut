@@ -17,9 +17,10 @@ namespace BertCut.App;
 /// which an airspace-bound child HWND forbids outright.
 /// </para>
 /// <para>
-/// The control works in output-space pixels and converts to screen coordinates only when
-/// drawing and hit-testing, so what the user positions is literally the rectangle the
-/// ffmpeg filter graph receives — no rounding creeps in between the two.
+/// The control works in the canvas's own pixels — <see cref="EditorViewModel.CanvasSize"/>,
+/// which is the picture being composited under it — and converts to screen coordinates only
+/// when drawing and hit-testing, so what the user positions is literally the rectangle the
+/// ffmpeg filter graph receives, with no rounding in between the two.
 /// </para>
 /// </remarks>
 public sealed class RectEditor : FrameworkElement
@@ -86,6 +87,7 @@ public sealed class RectEditor : FrameworkElement
         if (e.PropertyName is nameof(EditorViewModel.Mode)
             or nameof(EditorViewModel.IsPlacing)
             or nameof(EditorViewModel.PendingRect)
+            or nameof(EditorViewModel.CanvasSize)
             or nameof(EditorViewModel.Project))
         {
             Sync();
@@ -121,13 +123,13 @@ public sealed class RectEditor : FrameworkElement
     {
         if (_model is null) return new Rect(0, 0, ActualWidth, ActualHeight);
 
-        var output = _model.Project.Output;
-        if (output.Width <= 0 || output.Height <= 0 || ActualWidth <= 0 || ActualHeight <= 0)
+        var (canvasWidth, canvasHeight) = _model.CanvasSize;
+        if (canvasWidth <= 0 || canvasHeight <= 0 || ActualWidth <= 0 || ActualHeight <= 0)
             return new Rect(0, 0, ActualWidth, ActualHeight);
 
-        var scale = Math.Min(ActualWidth / output.Width, ActualHeight / output.Height);
-        var w = output.Width * scale;
-        var h = output.Height * scale;
+        var scale = Math.Min(ActualWidth / canvasWidth, ActualHeight / canvasHeight);
+        var w = canvasWidth * scale;
+        var h = canvasHeight * scale;
 
         return new Rect((ActualWidth - w) / 2, (ActualHeight - h) / 2, w, h);
     }
@@ -135,9 +137,9 @@ public sealed class RectEditor : FrameworkElement
     private Rect ToScreen(RectI rect)
     {
         var bounds = VideoBounds();
-        var output = _model!.Project.Output;
-        var scaleX = bounds.Width / output.Width;
-        var scaleY = bounds.Height / output.Height;
+        var (canvasWidth, canvasHeight) = _model!.CanvasSize;
+        var scaleX = bounds.Width / canvasWidth;
+        var scaleY = bounds.Height / canvasHeight;
 
         return new Rect(
             bounds.X + (rect.X * scaleX),
@@ -149,10 +151,10 @@ public sealed class RectEditor : FrameworkElement
     private (int X, int Y) ToOutput(Point point)
     {
         var bounds = VideoBounds();
-        var output = _model!.Project.Output;
+        var (canvasWidth, canvasHeight) = _model!.CanvasSize;
 
-        var x = (point.X - bounds.X) / Math.Max(1, bounds.Width) * output.Width;
-        var y = (point.Y - bounds.Y) / Math.Max(1, bounds.Height) * output.Height;
+        var x = (point.X - bounds.X) / Math.Max(1, bounds.Width) * canvasWidth;
+        var y = (point.Y - bounds.Y) / Math.Max(1, bounds.Height) * canvasHeight;
 
         return ((int)Math.Round(x), (int)Math.Round(y));
     }
@@ -220,22 +222,19 @@ public sealed class RectEditor : FrameworkElement
         _ => (rect.X, rect.Y),
     };
 
-    protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
+    // The three methods below are the gesture, and the mouse handlers under them are three
+    // lines each. The split is the same one TimelineControl makes and for the same reason:
+    // the harness cannot synthesise a pointer, and a free-shaped box is something only a
+    // pointer can draw — with the logic inside the event handlers there would be no way to
+    // exercise the one gesture this whole feature rests on.
+
+    /// <summary>Begins whatever gesture a press at this point means.</summary>
+    internal void PointerDown(Point point)
     {
         if (_model is null || !_model.IsPlacing) return;
 
-        // Double-click commits, so a mouse-led placement never has to reach for Enter.
-        if (e.ClickCount == 2)
-        {
-            _model.Dispatch(EditorIntent.Commit);
-            e.Handled = true;
-            return;
-        }
-
-        var point = e.GetPosition(this);
         var rect = ToScreen(_model.PendingRect);
 
-        CaptureMouse();
         _dragOrigin = point;
         _dragStartRect = _model.PendingRect;
 
@@ -251,7 +250,95 @@ public sealed class RectEditor : FrameworkElement
         {
             _drag = rect.Contains(point) ? DragKind.Move : DragKind.DrawNew;
         }
+    }
 
+    /// <summary>
+    /// Carries the gesture the press began to this point.
+    /// </summary>
+    /// <remarks>
+    /// <paramref name="snapToVideo"/> is Shift, which holds a free crop to the video's own
+    /// ratio while it is down. Passed in rather than read off the keyboard here so a scripted
+    /// run can hold it, and read on every move rather than once at the press, so it can be
+    /// taken up and let go partway through a drag.
+    /// </remarks>
+    internal void PointerMove(Point point, bool snapToVideo = false)
+    {
+        if (_model is null || !_model.IsPlacing || _drag == DragKind.None) return;
+
+        switch (_drag)
+        {
+            case DragKind.Resize:
+                var (x, y) = ToOutput(point);
+                _model.ResizePendingRect(_resizeAnchor.X, _resizeAnchor.Y, x, y, snapToVideo);
+                break;
+
+            case DragKind.Move:
+                var bounds = VideoBounds();
+                var (canvasWidth, canvasHeight) = _model.CanvasSize;
+
+                var dx = (int)Math.Round((point.X - _dragOrigin.X) / Math.Max(1, bounds.Width) * canvasWidth);
+                var dy = (int)Math.Round((point.Y - _dragOrigin.Y) / Math.Max(1, bounds.Height) * canvasHeight);
+
+                _model.SetPendingRect(_dragStartRect with { X = _dragStartRect.X + dx, Y = _dragStartRect.Y + dy });
+                break;
+
+            case DragKind.DrawNew:
+                if (Math.Abs(point.X - _dragOrigin.X) < DragThreshold
+                    && Math.Abs(point.Y - _dragOrigin.Y) < DragThreshold)
+                    return;
+
+                var (x0, y0) = ToOutput(_dragOrigin);
+                var (x1, y1) = ToOutput(point);
+                _model.DragPendingRect(x0, y0, x1, y1, snapToVideo);
+                break;
+        }
+    }
+
+    /// <summary>Ends the gesture, whatever it was.</summary>
+    internal void PointerUp() => _drag = DragKind.None;
+
+    /// <summary>
+    /// Where a point of the canvas sits on screen — the inverse of the mapping the gestures
+    /// above run, so a caller with a rectangle in mind can press on it.
+    /// </summary>
+    internal Point PointFor(int x, int y)
+    {
+        var bounds = VideoBounds();
+        var (canvasWidth, canvasHeight) = _model?.CanvasSize ?? (1, 1);
+
+        return new Point(
+            bounds.X + ((double)x / Math.Max(1, canvasWidth) * bounds.Width),
+            bounds.Y + ((double)y / Math.Max(1, canvasHeight) * bounds.Height));
+    }
+
+    /// <summary>Which corner of the pending box is nearest a point of the canvas.</summary>
+    /// <remarks>
+    /// So a scripted drag can grab a handle the way a hand does — by aiming at roughly the
+    /// right corner — rather than by being told which of the four it wants.
+    /// </remarks>
+    internal Point NearestCornerPoint(int x, int y)
+    {
+        var rect = _model?.PendingRect ?? default;
+
+        return PointFor(
+            Math.Abs(x - rect.X) <= Math.Abs(x - rect.Right) ? rect.X : rect.Right,
+            Math.Abs(y - rect.Y) <= Math.Abs(y - rect.Bottom) ? rect.Y : rect.Bottom);
+    }
+
+    protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
+    {
+        if (_model is null || !_model.IsPlacing) return;
+
+        // Double-click commits, so a mouse-led placement never has to reach for Enter.
+        if (e.ClickCount == 2)
+        {
+            _model.Dispatch(EditorIntent.Commit);
+            e.Handled = true;
+            return;
+        }
+
+        CaptureMouse();
+        PointerDown(e.GetPosition(this));
         e.Handled = true;
     }
 
@@ -267,34 +354,7 @@ public sealed class RectEditor : FrameworkElement
             return;
         }
 
-        switch (_drag)
-        {
-            case DragKind.Resize:
-                var (x, y) = ToOutput(point);
-                _model.ResizePendingRect(_resizeAnchor.X, _resizeAnchor.Y, x, y);
-                break;
-
-            case DragKind.Move:
-                var bounds = VideoBounds();
-                var output = _model.Project.Output;
-
-                var dx = (int)Math.Round((point.X - _dragOrigin.X) / Math.Max(1, bounds.Width) * output.Width);
-                var dy = (int)Math.Round((point.Y - _dragOrigin.Y) / Math.Max(1, bounds.Height) * output.Height);
-
-                _model.SetPendingRect(_dragStartRect with { X = _dragStartRect.X + dx, Y = _dragStartRect.Y + dy });
-                break;
-
-            case DragKind.DrawNew:
-                if (Math.Abs(point.X - _dragOrigin.X) < DragThreshold
-                    && Math.Abs(point.Y - _dragOrigin.Y) < DragThreshold)
-                    return;
-
-                var (x0, y0) = ToOutput(_dragOrigin);
-                var (x1, y1) = ToOutput(point);
-                _model.DragPendingRect(x0, y0, x1, y1);
-                break;
-        }
-
+        PointerMove(point, Keyboard.Modifiers.HasFlag(ModifierKeys.Shift));
         e.Handled = true;
     }
 
@@ -315,7 +375,7 @@ public sealed class RectEditor : FrameworkElement
     {
         if (_drag == DragKind.None) return;
 
-        _drag = DragKind.None;
+        PointerUp();
         ReleaseMouseCapture();
         e.Handled = true;
     }

@@ -59,7 +59,7 @@ public static class FfmpegArgs
     public static List<string> RenderSegment(
         FlatSegment segment,
         SegmentTiming timing,
-        OutputFormat output,
+        OutputFormat delivered,
         string basePath,
         string? overlayPath,
         VideoEncoder encoder,
@@ -79,10 +79,10 @@ public static class FfmpegArgs
             args.AddRange(["-ss", Seconds(timing.OverlayStart), "-i", overlayPath!]);
         }
 
-        args.AddRange(["-filter_complex", BuildFilterGraph(segment, output, hasOverlay)]);
+        args.AddRange(["-filter_complex", BuildFilterGraph(segment, delivered, hasOverlay)]);
         args.AddRange(["-map", "[vout]"]);
         args.AddRange(VideoEncoderArgs(encoder, quality));
-        args.AddRange(["-fps_mode", "cfr", "-r", output.FrameRate.ToString()]);
+        args.AddRange(["-fps_mode", "cfr", "-r", delivered.FrameRate.ToString()]);
         args.AddRange(ProgressFlags);
         args.Add(outputPath);
 
@@ -187,20 +187,23 @@ public static class FfmpegArgs
     /// <summary>
     /// The filter chain for one segment: crop-and-zoom on the base, then the overlay.
     /// </summary>
-    internal static string BuildFilterGraph(FlatSegment segment, OutputFormat output, bool hasOverlay)
+    /// <remarks>
+    /// <paramref name="delivered"/> is <c>Project.DeliveredSize</c>, not the output format —
+    /// a crop covering the whole timeline is delivered at its own size. That is what keeps
+    /// this a scale with no pad in it even though a crop may now be any shape: either the
+    /// scale is the identity because the delivered size <em>is</em> the crop's, or the crop
+    /// covers part of the timeline and zooming it to fill is what was asked for.
+    /// </remarks>
+    internal static string BuildFilterGraph(FlatSegment segment, OutputFormat delivered, bool hasOverlay)
     {
         var graph = new System.Text.StringBuilder();
         graph.Append("[0:v]");
 
         if (segment.Crop is { } crop)
-        {
-            // Crop rects are aspect-locked to the output, so this scale never needs a pad.
-            // That missing branch is one fewer place the preview and the export can differ.
             graph.Append(CultureInfo.InvariantCulture, $"crop={crop.W}:{crop.H}:{crop.X}:{crop.Y},");
-        }
 
         graph.Append(CultureInfo.InvariantCulture,
-            $"scale={output.Width}:{output.Height}:flags=lanczos,setsar=1,format=yuv420p");
+            $"scale={delivered.Width}:{delivered.Height}:flags=lanczos,setsar=1,format=yuv420p");
 
         if (!hasOverlay)
         {
@@ -208,10 +211,18 @@ public static class FfmpegArgs
             return graph.ToString();
         }
 
-        var dest = segment.Overlay!.Value.Dest;
+        var clip = segment.Overlay!.Value;
+        var dest = clip.Dest;
         graph.Append("[vbase];");
+        graph.Append("[1:v]");
+
+        // A cut-out region is in the overlay source's own pixels, which is exactly what the
+        // crop filter wants — no mapping, and nothing to disagree with the preview about.
+        if (clip.Src is { } src)
+            graph.Append(CultureInfo.InvariantCulture, $"crop={src.W}:{src.H}:{src.X}:{src.Y},");
+
         graph.Append(CultureInfo.InvariantCulture,
-            $"[1:v]scale={dest.W}:{dest.H}:flags=lanczos,setsar=1,format=yuv420p[vpip];");
+            $"scale={dest.W}:{dest.H}:flags=lanczos,setsar=1,format=yuv420p[vpip];");
 
         // eof_action=pass leaves the base visible if the overlay source runs out; the
         // default repeats its last frame, which reads as a freeze.

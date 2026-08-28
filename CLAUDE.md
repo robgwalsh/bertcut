@@ -73,6 +73,16 @@ and carries on. Four things follow, and each was got wrong first.
   wanted them. A 250 ms hiccup now costs 250 ms of playback and nothing else. The ring is
   budgeted in **bytes**, not frames — a frame is 1 MB at 640x384 and 24 MB at 4K, so a count
   would be either trivial or most of a gigabyte.
+- **A new document throws the ring away, and the shell lets go of what it is holding.**
+  Nothing in a frame's index says which document composited it, so read-ahead survives an
+  edit and gets served back: applying a crop or nudging an overlay box left the picture
+  exactly as it was until the playhead moved off the frame and back. The pump invalidates on
+  the project *reference* changing — the document is immutable, so the same reference is the
+  same picture, and a whole run of playback holds one and invalidates nothing. The other half
+  is in `EditorViewModel.RenderCurrentFrame`: the buffer on screen is the last thing still
+  claiming to be this frame, and holding the playhead's own frame is exactly the condition
+  `LeaseNearest` reads as "nothing better is available". Nothing flickers in between, because
+  the shell copied the pixels out when it was handed them.
 - **Reverse is served a window at a time, not a frame at a time.** A backwards step has no
   route but the preceding keyframe, so it is a seek — longer than a frame lasts, which means
   serving one at a time never converges: the seek outlasts the frame period, the playhead has
@@ -96,13 +106,66 @@ are, so a scripted run does not wait out a dozen frames nobody asked about.
 `Reset` and `Dispose`, is a command the pump thread drains: freeing a decoder from the UI
 thread mid-`sws_scale` is a use-after-free rather than a race with a wrong answer.
 
+## The shape of a crop
+
+A crop is **any shape the user draws**. Nothing holds it to the output's ratio, and its only
+rules are the frame it is drawn on, a minimum edge, and even dimensions — ffmpeg's crop
+filter fails outright on an odd one with yuv420p.
+
+A free ratio has to land somewhere, and it lands on `Project.DeliveredSize`:
+
+- **A crop covering the whole timeline is delivered at its own size.** Reframing an entire
+  recording to a tall strip writes a tall file. The alternative is stretching the strip back
+  to a landscape frame, which is the one thing a crop must never do, or padding it out, which
+  delivers a frame mostly made of black.
+- **A crop over part of the timeline zooms to fill, as it always did.** One stretch of an edit
+  does not get a resolution of its own: every segment of one export scales to the same size or
+  the concat that joins them has two stream descriptions and no way to reconcile them. A
+  partial crop of a shape the output is not will therefore distort, and that is the user's
+  call — they drew it.
+- It is **derived, not stored**, so it cannot disagree with the crop it describes. Undo the
+  crop and the delivered size goes back in the same edit.
+
+That splits one coordinate space into two, and the split is load-bearing:
+
+- **A crop rect is in output space** — the frame as it arrives, before anything is cropped
+  away. That is the picture the user drew it on.
+- **An overlay's `Dest` is in delivered space** — where it lands on the finished frame.
+- **An overlay's `Src` is in its source's own pixels.** It names a region of a recording,
+  which no later edit moves, and it is what ffmpeg's crop filter wants with no mapping.
+
+`EditorViewModel.CanvasSize` is the space the box being placed is measured in, and both the
+preview's composite size and `RectEditor`'s screen mapping come from it, so a box is always
+drawn in the space it is measured in. In crop mode it answers with the *output*, because
+`PreviewProject` takes the existing crop off the preview while a new one is being chosen — you
+cannot choose a region out of a frame that has already had one taken out of it, and a box drawn
+over the zoomed result of the first crop would land somewhere other than where it was drawn.
+
+`PreviewEngine.ZoomCropInto` maps the crop onto the source through the **output** size and not
+through the canvas. They are proportional right up until a whole-timeline crop makes the canvas
+the crop's own shape, at which point reading the ratio off the canvas maps the rectangle
+through its own effect.
+
+Only the mouse can reshape a box: `Shift+↑/↓` scales both edges together, and a corner handle
+is what changes one alone. That is why `draw-rect` and `drag-rect-corner` exist in the harness,
+and why `RectEditor`'s gestures live in `PointerDown`/`PointerMove`/`PointerUp` rather than in
+its mouse handlers.
+
+**Holding Shift during a drag lends the free crop the video's own ratio** — the same lock an
+overlay's box lives under, borrowed for as long as the key is down. It is read on every pointer
+move rather than once at the press, because a user reaches for Shift partway through a drag as
+readily as before it, and letting go hands the shape straight back. Two different gestures wear
+the key: `Shift+↑/↓` on the keyboard scales the box, Shift held under the pointer constrains it.
+Like every locked drag it **covers** what was dragged rather than fitting inside it, so nothing
+the pointer went over is given up — a 240x340 drag on a 16:9 video comes back 576x324.
+
 ## The preview's own resolution
 
 The preview is composited at the size it is **displayed** at, not the project's output size.
-`MainWindow.ApplyPreviewSize` divides the output by the smallest integer that still meets the
-pane's physical pixels, capped at 4. A 3840x2160 project in this window renders at 1280x720 —
-a ninth of the pixels — and a 1280x768 one on a 200%-scaled 4K display correctly stays at full
-size, because the pane really does have 2286x1019 pixels to fill.
+`MainWindow.ApplyPreviewSize` divides the delivered size by the smallest integer that still
+meets the pane's physical pixels, capped at 4. A 3840x2160 project in this window renders at
+1280x720 — a ninth of the pixels — and a 1280x768 one on a 200%-scaled 4K display correctly
+stays at full size, because the pane really does have 2286x1019 pixels to fill.
 
 Snapping to an integer divisor rather than tracking the pane exactly is the point: every
 cached decoder scales on output, so following a window edge would rebuild all of them and
@@ -206,6 +269,16 @@ same `OverlayContent` — which source, from which of its frames, for how long �
 kind is forgotten. The arithmetic is `BertCut.Core.Edits.OverlayPlacement`, in Core so it is
 testable without a window.
 
+There is a fourth way in, and it does not come through the card. **`O` in crop mode lays the
+drawn region back over the video instead of cropping to it** — the same rectangle, answering
+the other question it could have answered. Cutting a shape out of the picture and deciding what
+to do with it is one gesture, so the choice is a keypress at the end of it rather than a mode
+picked before there is anything to choose about. It hands over to placement rather than
+committing: the region becomes the clip's *content*, converted to the source's own pixels on
+the way through, and the box that follows is where it lands — locked to the region's ratio, so
+what was cut out is never stretched. The base stays whole underneath, and the delivered size
+does not move.
+
 **Where** is answered by the playhead. `PendingRange` is a function of it, recomputed in the
 `Playhead` setter, so moving the playhead by any means — a key, the ruler, an audio sync —
 carries the clip and its ghost band along. Two rules follow:
@@ -254,6 +327,12 @@ entry there.
 
 FFmpeg lives in `tools/ffmpeg/` (gitignored, ~200 MB, reproduced by `tools/fetch-ffmpeg.ps1`).
 It is already installed here. Tests that need it skip when it is absent.
+
+The application icon is `src/BertCut.App/Assets/app.ico`, checked in and drawn by
+`tools/make-icon.ps1`. Change the mark in the script and re-run it rather than editing the file:
+each of the eight sizes in it is composed for the size it is displayed at, and the small ones
+are deliberately not the 256 scaled down. It is what `ApplicationIcon` embeds in `BertCut.exe`
+and what the workflows and `scripts/pack.ps1` hand to `vpk`.
 
 ## Releasing
 
@@ -312,13 +391,23 @@ scrub <frame>               click the ruler above the track — seeks, and desel
 drag-playhead <from> <to>   press on the ruler and drag, so the playhead outruns the decoder
                             the way it does under a hand. Not the same test as a run of
                             scrubs: the pointer never lifts.
+draw-rect <x0> <y0> <x1> <y1> [shift]
+                                    drag a new crop or overlay box out on the preview, in
+                                    canvas pixels — the only gesture that gives a box a shape
+                                    of its own. The press must land outside the box already
+                                    there, or it moves that one instead. `shift` holds the key
+                                    down for the length of the drag, snapping to the video's
+                                    ratio.
+drag-rect-corner <x0> <y0> <x1> <y1> [shift]
+                                    grab the corner nearest the first point and drag it to
+                                    the second, which reshapes one edge and leaves the other
 goto <frame> | play | stop | tick [n] | sleep <ms> | reset | close | settle [ms]
 shot <name> [element]       PNG of the window, or of any x:Name'd element
 dump-preview <name>.png     the composited video frame alone, no interface
 state                       one JSON line: playhead, duration, marks, mode, hasMedia, crops,
                             overlays, segments, selectedSegment, overlaySourceStart,
-                            selectedOverlay, overlayStart, overlayEnd, overlayLength, muted,
-                            canUndo, previewSize, status
+                            selectedOverlay, overlayStart, overlayEnd, overlayLength, crop,
+                            overlaySrc, delivered, muted, canUndo, previewSize, status
 assert-status <substring> | assert-timecode <text> | assert-frame <n>
 assert-mode Normal|Crop|Overlay|OverlaySource   the card is a mode, and this is what says
                                                 a choice has been taken
@@ -329,6 +418,9 @@ assert-overlay-start <a> [b] | assert-overlay-end <a> [b]
                                       question" is the one being placed, else the selected
                                       one, else the one under the playhead — a trim moves a
                                       clip out from under it.
+assert-crop <WxH+X+Y>                 the box being drawn, or the crop over the playhead
+assert-overlay-src <WxH+X+Y>|none     the region the clip cuts out of its source
+assert-delivered <WxH>                the size the finished picture comes out at
 assert-overlay-selected [index] | assert-no-overlay-selected | assert-overlays <n>
 assert-segment-selected [index] | assert-no-segment-selected | assert-segments <n>
 assert-marks <in> <out> | assert-no-marks    an overlay of the marked range borrows the marks
@@ -432,5 +524,5 @@ Worth knowing, because each of these was checked rather than assumed:
   window and refusing WPF focus all fail to prevent it. `ForegroundGuard` polls at 10 ms and
   hands the foreground straight back; sampling from another process at 15 ms sees no transition
   at all. If a run ever reports more than one correction, something new is activating it.
-- **Animations are settled before a capture** — `MainWindow.SettleAnimations` clears the help
-  and settings fades, so the same overlay captured twice is byte-identical.
+- **Animations are settled before a capture** — `MainWindow.SettleAnimations` clears the
+  settings, card and toast fades, so the same overlay captured twice is byte-identical.

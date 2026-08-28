@@ -171,6 +171,62 @@ public class PreviewEngineTests : IDisposable
     }
 
     [SkippableFact]
+    public async Task A_whole_timeline_crop_is_composited_at_the_delivered_size()
+    {
+        Skip.If(_runtime is null, "No FFmpeg 8+ build found.");
+
+        var (project, engine, _) = await SetUpAsync(MakeSplitSource());
+        using var _engine = engine;
+
+        // A tall strip out of the red half. The delivered size is the crop's own, so the
+        // shell composites at that shape rather than at the output's.
+        var crop = new RectI(0, 0, 80, 240);
+        var cropped = TimelineEdits.SetCrop(project, new FrameRange(0, project.DurationFrames), crop);
+
+        Assert.Equal((80, 240), cropped.DeliveredSize);
+        engine.SetRenderSize(crop.W, crop.H);
+
+        Assert.True(engine.Render(new TimelineResolver(cropped), 10));
+
+        // Every column is red. Mapping the crop through the canvas rather than through the
+        // output would read the ratio off the crop's own effect: 80 canvas columns stepping
+        // by source/canvas would sweep the whole 320-pixel frame and bring the blue half in
+        // at the right-hand edge.
+        foreach (var x in new[] { 2, 40, 78 })
+        {
+            var (r, _, b) = PixelAt(engine.Canvas, x, 120);
+            Assert.True(r > 150 && b < 90, $"x={x} should be red, was ({r},_,{b})");
+        }
+    }
+
+    [SkippableFact]
+    public async Task An_overlay_of_a_region_shows_that_region_rather_than_the_whole_source()
+    {
+        Skip.If(_runtime is null, "No FFmpeg 8+ build found.");
+
+        // A piece of the base laid back over the base — the same source on both layers,
+        // which is the case a cut-out region exists for.
+        var (project, engine, _) = await SetUpAsync(MakeSplitSource());
+        using var _engine = engine;
+
+        var withRegion = TimelineEdits.AddOverlay(project, new OverlayClip(
+            new FrameRange(0, 60), SourceId: 1, SourceStartFrame: 0,
+            Dest: new RectI(20, 20, 100, 60),
+            Src: new RectI(200, 0, 100, 240)));
+
+        Assert.True(engine.Render(new TimelineResolver(withRegion), 10));
+
+        // The region came out of the blue half, and it landed over the red one.
+        var (ir, _, ib) = PixelAt(engine.Canvas, 70, 50);
+        Assert.True(ib > 150 && ir < 90, $"inside the clip should be the blue region, was ({ir},_,{ib})");
+
+        // Immediately below it, the base is untouched — a cut-out is laid over the picture,
+        // not taken out of it.
+        var (br, _, bb) = PixelAt(engine.Canvas, 70, 120);
+        Assert.True(br > 150 && bb < 90, $"below the clip should still be red, was ({br},_,{bb})");
+    }
+
+    [SkippableFact]
     public async Task An_overlay_is_drawn_only_inside_its_destination_rectangle()
     {
         Skip.If(_runtime is null, "No FFmpeg 8+ build found.");

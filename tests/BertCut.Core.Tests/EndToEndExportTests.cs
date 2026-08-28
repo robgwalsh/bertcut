@@ -191,7 +191,6 @@ public class EndToEndExportTests : IDisposable
         var source = MakeSource("crop.mp4", seconds: 6);
         var probe = await new MediaProber(_runtime!).ProbeAsync(source);
 
-        // 640x480 is 4:3, so a 320x240 crop keeps the aspect lock.
         var project = TimelineEdits.ImportSource(
             Project.Empty(new OutputFormat(640, 480, Rational.FromInt(30))),
             probe.Media);
@@ -217,6 +216,75 @@ public class EndToEndExportTests : IDisposable
 
         Assert.Equal("640,480", size);
         Assert.InRange(DurationOf(output), 5.7, 6.3);
+    }
+
+    [SkippableFact]
+    public async Task A_crop_over_the_whole_timeline_is_written_at_the_crop_size()
+    {
+        Skip.If(_runtime is null, "No FFmpeg 8+ build found.");
+
+        var source = MakeSource("reframe.mp4", seconds: 4);
+        var probe = await new MediaProber(_runtime!).ProbeAsync(source);
+
+        var project = TimelineEdits.ImportSource(
+            Project.Empty(new OutputFormat(640, 480, Rational.FromInt(30))),
+            probe.Media);
+
+        // A tall strip out of a landscape recording, over the whole of it. Neither 4:3 nor
+        // anything else the output could offer, which is the point: the file comes out the
+        // shape it was cropped to rather than stretched back or padded out to 640x480.
+        project = TimelineEdits.SetCrop(
+            project, new FrameRange(0, project.DurationFrames), new RectI(200, 0, 240, 480));
+
+        Assert.Equal((240, 480), project.DeliveredSize);
+
+        var output = Path.Combine(_dir, "out-reframe.mp4");
+        var plan = ExportPlanner.Plan(
+            project, new ExportSettings(output), _runtime!.Capabilities, _ => probe.Index, _dir);
+
+        await new ExportRunner(_runtime).RunAsync(plan, _dir);
+
+        var size = Run(_runtime.FfprobePath,
+            ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+             "-of", "csv=p=0", output]).Trim();
+
+        Assert.Equal("240,480", size);
+        Assert.InRange(DurationOf(output), 3.7, 4.3);
+    }
+
+    [SkippableFact]
+    public async Task A_region_cut_out_of_the_base_is_overlaid_on_the_base_itself()
+    {
+        Skip.If(_runtime is null, "No FFmpeg 8+ build found.");
+
+        // The one case where a clip's source is the base's own: a corner of the picture
+        // blown up and laid back over it. Both layers read the same file, so this is also
+        // the check that two inputs of one path is something ffmpeg is content with.
+        var source = MakeSource("magnify.mp4", seconds: 4);
+        var probe = await new MediaProber(_runtime!).ProbeAsync(source);
+
+        var project = TimelineEdits.ImportSource(
+            Project.Empty(new OutputFormat(640, 480, Rational.FromInt(30))), probe.Media);
+
+        project = TimelineEdits.AddOverlay(project, new OverlayClip(
+            new FrameRange(30, 90), SourceId: 1, SourceStartFrame: 30,
+            Dest: new RectI(320, 240, 300, 200), Src: new RectI(40, 40, 150, 100)));
+
+        var output = Path.Combine(_dir, "out-region.mp4");
+        var plan = ExportPlanner.Plan(
+            project, new ExportSettings(output), _runtime!.Capabilities, _ => probe.Index, _dir);
+
+        await new ExportRunner(_runtime).RunAsync(plan, _dir);
+
+        Assert.True(File.Exists(output), "the region overlay produced no file");
+
+        // The base is still shown whole underneath, so the output keeps the output's size.
+        var size = Run(_runtime.FfprobePath,
+            ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+             "-of", "csv=p=0", output]).Trim();
+
+        Assert.Equal("640,480", size);
+        Assert.InRange(DurationOf(output), 3.7, 4.3);
     }
 
     [SkippableFact]

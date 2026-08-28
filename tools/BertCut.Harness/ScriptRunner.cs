@@ -126,6 +126,12 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
             case "assert-no-overlay-selected": AssertNoOverlaySelected(); break;
             case "assert-overlay-start": AssertOverlayStart(rest); break;
             case "assert-overlay-end": AssertOverlayEnd(rest); break;
+            case "draw-rect": DrawRect(rest); break;
+            case "drag-rect-corner": DragRectCorner(rest); break;
+
+            case "assert-overlay-src": AssertOverlaySrc(rest); break;
+            case "assert-crop": AssertCrop(rest); break;
+            case "assert-delivered": AssertDelivered(rest); break;
             case "assert-overlays": AssertOverlays(rest); break;
             case "assert-marks": AssertMarks(rest); break;
             case "assert-no-marks": AssertMarks(""); break;
@@ -617,6 +623,15 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
             ("overlayLength",
                 model.PendingOverlayContent is { } content ? Text(content.LengthFrames) : "null"),
 
+            // The shape of the crop in question and the region an overlay cuts out of its
+            // source — both free-shaped, and neither visible in a count.
+            ("crop", CropInQuestion(model) is { } rect ? Quote(rect.ToString()) : "null"),
+            ("overlaySrc", OverlaySrc(model) is { } src ? Quote(src.ToString()) : "null"),
+
+            // What comes out, which is the crop's own size when one covers the whole
+            // timeline and the output's otherwise.
+            ("delivered", Quote($"{model.Project.DeliveredSize.Width}x{model.Project.DeliveredSize.Height}")),
+
             ("muted", model.IsMuted ? "true" : "false"),
             ("canUndo", model.CanUndo ? "true" : "false"),
 
@@ -631,6 +646,23 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
 
         return "{" + string.Join(",", fields.Select(f => $"{Quote(f.Name)}:{f.Value}")) + "}";
     });
+
+    /// <summary>The crop being drawn, or the one covering the playhead.</summary>
+    private static RectI? CropInQuestion(EditorViewModel model)
+    {
+        if (model.Mode == EditorMode.Crop) return model.PendingRect;
+
+        foreach (var crop in model.Project.Crops)
+            if (crop.Range.Contains(model.Playhead)) return crop.Rect;
+
+        return null;
+    }
+
+    /// <summary>The region the overlay in question cuts out of its source, if any.</summary>
+    private static RectI? OverlaySrc(EditorViewModel model) =>
+        model.Mode == EditorMode.Overlay
+            ? model.PendingOverlaySrc
+            : (model.SelectedOverlayClip ?? OverlayAtPlayhead(model))?.Src;
 
     /// <summary>
     /// The source in-point of the overlay under the playhead, or of one being placed.
@@ -792,6 +824,175 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
         if (actual < low || actual > high)
             throw new AssertionException(
                 $"expected the overlay to {(start ? "start" : "end")} in [{low}, {high}], got {actual}.");
+    }
+
+    /// <summary>
+    /// Draws a new placement rectangle, from one point of the canvas to another.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The only gesture that can give a crop a shape of its own — the keyboard grows and
+    /// shrinks a box but never reshapes one — so without this the whole free-shape feature
+    /// would be undrivable and a box that quietly snapped back to the output's ratio would
+    /// pass every run.
+    /// </para>
+    /// <para>
+    /// Through <c>RectEditor</c>'s own press-move-release methods at points it works out
+    /// itself, for the same reason as every other pointer gesture here: nothing synthesises
+    /// operating-system input, so what is under test is the hit test and the
+    /// pixel-to-rectangle arithmetic rather than the event plumbing above it.
+    /// </para>
+    /// <para>
+    /// The press has to land outside the box already on screen, or it moves that box instead
+    /// of drawing a new one — which is what a hand would get too.
+    /// </para>
+    /// <para>
+    /// A trailing <c>shift</c> holds the key down for the length of the drag, which snaps the
+    /// box to the video's own ratio. Held rather than tapped, because that is what it is: the
+    /// modifier is read on every pointer move, not once at the press.
+    /// </para>
+    /// </remarks>
+    private void DrawRect(string rest)
+    {
+        var (x0, y0, x1, y1, shift) = DragArguments(rest, "draw-rect");
+
+        session.Dispatcher.Invoke(() =>
+        {
+            var placement = session.Window.Placement;
+            placement.PointerDown(placement.PointFor(x0, y0));
+            Sweep(placement, x0, y0, x1, y1, shift);
+        });
+
+        session.Settle();
+    }
+
+    /// <summary>Grabs the corner nearest one point of the canvas and drags it to another.</summary>
+    /// <remarks>
+    /// The corner handle is what reshapes one edge without touching the other, and it is the
+    /// gesture a locked rectangle answers differently from a free one — so both halves of
+    /// the aspect rule are reachable from a script, with or without a trailing <c>shift</c>.
+    /// </remarks>
+    private void DragRectCorner(string rest)
+    {
+        var (x0, y0, x1, y1, shift) = DragArguments(rest, "drag-rect-corner");
+
+        session.Dispatcher.Invoke(() =>
+        {
+            var placement = session.Window.Placement;
+            placement.PointerDown(placement.NearestCornerPoint(x0, y0));
+            Sweep(placement, x0, y0, x1, y1, shift);
+        });
+
+        session.Settle();
+    }
+
+    /// <summary>Moves the pointer from one point of the canvas to another and lets go.</summary>
+    private static void Sweep(RectEditor placement, int x0, int y0, int x1, int y1, bool shift)
+    {
+        for (var step = 1; step <= DragSteps; step++)
+        {
+            placement.PointerMove(
+                placement.PointFor(
+                    x0 + ((x1 - x0) * step / DragSteps),
+                    y0 + ((y1 - y0) * step / DragSteps)),
+                shift);
+        }
+
+        placement.PointerUp();
+    }
+
+    private static (int X0, int Y0, int X1, int Y1, bool Shift) DragArguments(string rest, string verb)
+    {
+        var parts = rest.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        var shift = parts.Length == 5
+            && string.Equals(parts[4], "shift", StringComparison.OrdinalIgnoreCase);
+
+        if (parts.Length != 4 && !shift)
+            throw new FormatException($"{verb} needs four numbers and an optional 'shift', got '{rest}'.");
+
+        return (Number(parts[0], verb), Number(parts[1], verb),
+                Number(parts[2], verb), Number(parts[3], verb), shift);
+    }
+
+    /// <summary>
+    /// The shape of the crop in question, or <c>none</c>.
+    /// </summary>
+    /// <remarks>
+    /// Written the way <c>RectI</c> prints itself — <c>WxH+X+Y</c> — because a crop may now
+    /// be any shape and its shape is the whole of what a run about cropping is asking about.
+    /// Nothing else in a run would show it: <c>state</c> counts the crops, and a box that
+    /// quietly snapped back to the output's ratio would still be one crop.
+    ///
+    /// The pending rectangle first, so a script can check the box before committing it, then
+    /// the crop covering the playhead.
+    /// </remarks>
+    private void AssertCrop(string rest)
+    {
+        var expected = Require(rest, "assert-crop");
+
+        var actual = session.Dispatcher.Invoke(() =>
+        {
+            var model = session.Model;
+            if (model.Mode == EditorMode.Crop) return model.PendingRect.ToString();
+
+            foreach (var crop in model.Project.Crops)
+                if (crop.Range.Contains(model.Playhead)) return crop.Rect.ToString();
+
+            return "none";
+        });
+
+        if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+            throw new AssertionException($"expected the crop to be {expected}, got {actual}.");
+    }
+
+    /// <summary>
+    /// The region the overlay in question cuts out of its source, or <c>none</c> for a clip
+    /// showing the whole picture.
+    /// </summary>
+    /// <remarks>
+    /// In the source's own pixels, which is where the clip stores it — the same rectangle
+    /// that reaches ffmpeg's crop filter, so a run asserts on the number that is used rather
+    /// than on one derived from it.
+    /// </remarks>
+    private void AssertOverlaySrc(string rest)
+    {
+        var expected = Require(rest, "assert-overlay-src");
+
+        var actual = session.Dispatcher.Invoke(() =>
+        {
+            var model = session.Model;
+            var src = model.Mode == EditorMode.Overlay
+                ? model.PendingOverlaySrc
+                : (model.SelectedOverlayClip ?? OverlayAtPlayhead(model))?.Src;
+
+            return src?.ToString() ?? "none";
+        });
+
+        if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+            throw new AssertionException($"expected the cut-out region to be {expected}, got {actual}.");
+    }
+
+    /// <summary>
+    /// The size the finished picture comes out at, written <c>WxH</c>.
+    /// </summary>
+    /// <remarks>
+    /// Not the output size: a crop covering the whole timeline is delivered at its own size,
+    /// so a free-shaped reframe is neither padded nor stretched. A partial crop leaves it
+    /// alone, and the difference between those two is exactly what this exists to catch.
+    /// </remarks>
+    private void AssertDelivered(string rest)
+    {
+        var expected = Require(rest, "assert-delivered");
+
+        var actual = session.Dispatcher.Invoke(() =>
+        {
+            var (width, height) = session.Model.Project.DeliveredSize;
+            return $"{width}x{height}";
+        });
+
+        if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+            throw new AssertionException($"expected to deliver {expected}, got {actual}.");
     }
 
     private void AssertOverlays(string rest)

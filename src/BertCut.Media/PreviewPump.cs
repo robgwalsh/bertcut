@@ -381,8 +381,18 @@ public sealed class PreviewPump : IDisposable
             _wantPending = false;
         }
 
+        // A different document is a different picture, at every frame the ring is holding.
+        // Nothing in a frame's index says which document composited it, so read-ahead from
+        // the one before this survives an edit and Fill answers with it: a crop applied or an
+        // overlay moved would leave the preview exactly as it was until the playhead moved
+        // off the frame and back. Reference equality is the whole test — the document is
+        // immutable, so the same reference is the same picture, and playback holds one
+        // reference for its entire run and never invalidates anything.
         if (_resolver is null || !ReferenceEquals(_resolver.Project, project))
+        {
             _resolver = new TimelineResolver(project);
+            InvalidateRing();
+        }
 
         if (direction < 0)
         {
@@ -633,13 +643,22 @@ public sealed class PreviewPump : IDisposable
     }
 
     /// <summary>Drops what has been read ahead without reallocating it.</summary>
+    /// <remarks>
+    /// <b>Including the slot out on loan.</b> Skipping it looks like the careful thing to do,
+    /// since it is the frame on screen — but the frame on screen is exactly the one that has
+    /// gone wrong. An edit that changes what a frame <em>looks like</em> without moving it
+    /// leaves that slot still claiming its index, <see cref="Fill"/> finds the frame already
+    /// read ahead and returns, and nothing is re-rendered: placing an overlay left the
+    /// picture untouched until the playhead happened to move. Clearing the index costs the
+    /// display nothing. The buffer is a managed array the shell is holding, and
+    /// <see cref="Claim"/> will not write over a slot that is in use, so the old picture
+    /// stays up until the new one arrives in a slot of its own.
+    /// </remarks>
     private void InvalidateRing()
     {
         lock (_gate)
         {
-            foreach (var slot in _ring)
-                if (!slot.InUse)
-                    slot.Index = -1;
+            foreach (var slot in _ring) slot.Index = -1;
         }
     }
 

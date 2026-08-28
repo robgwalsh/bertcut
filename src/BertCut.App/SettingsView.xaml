@@ -6,7 +6,7 @@
 
     <UserControl.Resources>
 
-        <!-- A keycap you can press. Same shape as the ones the help sheet prints, because
+        <!-- A keycap you can press. Same shape as the ones a tooltip prints, because
              it is the same thing — the difference is that this one is the control that
              changes it. -->
         <Style x:Key="KeyCapButton" TargetType="Button">
@@ -137,8 +137,6 @@
             <Grid Grid.Row="0" Margin="30,26,22,18">
                 <StackPanel>
                     <TextBlock Text="Settings" FontSize="27" FontWeight="Bold" Foreground="#F3F7FC" />
-                    <TextBlock Text="How BertCut answers to your hands."
-                               FontSize="14" Foreground="#8794A5" Margin="0,7,0,0" />
                 </StackPanel>
 
                 <Button HorizontalAlignment="Right" VerticalAlignment="Top"
@@ -178,9 +176,6 @@
                          from the thing it does. -->
                     <StackPanel Margin="0,2,0,16" MaxWidth="700" HorizontalAlignment="Left">
                         <TextBlock Text="Controls" FontSize="17" FontWeight="SemiBold" Foreground="#EDF2F8" />
-                        <TextBlock Style="{StaticResource CardBody}" Margin="0,6,0,0"
-                                   Text="Every key BertCut listens for. Click one and press the key you would rather use — Backspace takes an action off the keyboard, Esc leaves it alone. Changes save as you make them; there is no OK button here either." />
-
                         <ItemsControl x:Name="SectionList"
                                       ItemTemplate="{StaticResource SectionTemplate}"
                                       Focusable="False" Margin="0,0,0,10" />

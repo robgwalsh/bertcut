@@ -23,16 +23,11 @@ dump-preview 04-frame.png
 key Ctrl+Z
 assert-status Undo
 
-# The two overlays, settled so a capture is their finished state rather than a sample of a
+# The Controls page, settled so a capture is its finished state rather than a sample of a
 # fade. Toggled off again afterwards, so the state line at the end describes the editor.
-intent ToggleHelp
-assert-visible HelpOverlay
-shot 05-help
-intent ToggleHelp
-
 intent ToggleSettings
 assert-visible SettingsOverlay
-shot 06-settings
+shot 05-settings
 intent ToggleSettings
 
 state

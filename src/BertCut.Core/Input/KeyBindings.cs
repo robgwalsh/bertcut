@@ -188,8 +188,7 @@ public sealed class KeyBindings
         if (mode != EditorMode.Normal)
         {
             var global = Match(key, modifiers, EditorMode.Normal);
-            if (global is EditorIntent.Undo or EditorIntent.Redo
-                or EditorIntent.ToggleHelp or EditorIntent.ToggleSettings)
+            if (global is EditorIntent.Undo or EditorIntent.Redo or EditorIntent.ToggleSettings)
                 return global;
         }
 
@@ -214,10 +213,6 @@ public sealed class KeyBindings
 
         return "";
     }
-
-    /// <summary>Bindings grouped for the cheat sheet, in presentation order.</summary>
-    public IEnumerable<IGrouping<string, KeyBinding>> ForHelp() =>
-        Effective.Where(b => b.Mode == EditorMode.Normal).GroupBy(KeyMap.Category);
 
     /// <summary>The Controls page, grouped into its sections.</summary>
     public IEnumerable<IGrouping<string, ControlEntry>> ForSettings() => Entries.GroupBy(e => e.Category);

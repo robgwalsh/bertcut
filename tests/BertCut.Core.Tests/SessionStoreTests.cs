@@ -29,6 +29,34 @@ public class SessionStoreTests
     }
 
     [Fact]
+    public void A_cut_out_region_survives_the_round_trip()
+    {
+        var p = TimelineEdits.AddOverlay(TestProjects.Single(600), new OverlayClip(
+            new FrameRange(50, 200), SourceId: 1, SourceStartFrame: 0,
+            Dest: new RectI(40, 40, 320, 192), Src: new RectI(200, 100, 640, 384)));
+
+        var document = SessionStore.ToDocument(p);
+        var restored = SessionStore.FromDocument(document);
+
+        Assert.Equal(13, document.Overlays[0].Length);
+        Assert.Equal(p, restored);
+    }
+
+    [Fact]
+    public void A_session_written_before_cut_outs_existed_still_loads()
+    {
+        // The four numbers are appended, and a row is read by its length, so the old shape
+        // is still a whole-source clip rather than a file the editor refuses.
+        var p = TimelineEdits.AddOverlay(TestProjects.Single(600), new OverlayClip(
+            new FrameRange(50, 200), SourceId: 1, SourceStartFrame: 0, Dest: new RectI(40, 40, 320, 192)));
+
+        var document = SessionStore.ToDocument(p);
+
+        Assert.Equal(9, document.Overlays[0].Length);
+        Assert.Null(SessionStore.FromDocument(document).Overlays[0].Src);
+    }
+
+    [Fact]
     public void Timeline_positions_are_recomputed_rather_than_stored()
     {
         // Segment starts are the running total of the lengths, so the file cannot contain
@@ -232,10 +260,9 @@ public class KeyMapTests
     }
 
     [Fact]
-    public void Every_binding_carries_a_description_for_the_cheat_sheet()
+    public void Every_binding_carries_a_description_for_the_controls_page()
     {
         Assert.All(KeyMap.Bindings, b => Assert.False(string.IsNullOrWhiteSpace(b.Description)));
-        Assert.NotEmpty(KeyMap.ForHelp());
     }
 
     [Fact]

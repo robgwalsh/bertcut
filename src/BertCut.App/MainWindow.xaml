@@ -14,19 +14,6 @@
              the icons — lives in Theme.xaml at application scope, because the settings
              screen is built out of the same parts. -->
 
-        <Storyboard x:Key="HelpIn">
-            <DoubleAnimation Storyboard.TargetName="HelpCard"
-                             Storyboard.TargetProperty="Opacity"
-                             From="0" To="1" Duration="0:0:0.16" />
-            <DoubleAnimation Storyboard.TargetName="HelpCard"
-                             Storyboard.TargetProperty="RenderTransform.(TranslateTransform.Y)"
-                             From="18" To="0" Duration="0:0:0.26">
-                <DoubleAnimation.EasingFunction>
-                    <CubicEase EasingMode="EaseOut" />
-                </DoubleAnimation.EasingFunction>
-            </DoubleAnimation>
-        </Storyboard>
-
         <Storyboard x:Key="SettingsIn">
             <DoubleAnimation Storyboard.TargetName="Settings"
                              Storyboard.TargetProperty="Opacity"
@@ -74,9 +61,9 @@
             stays neutral; a toolbar where everything is accented has no accent.
 
             Getting a video in and getting one out lead the row, in that order, where a
-            wordmark used to sit. The app's name is already in the title bar and on the help
-            sheet; spending the most legible corner of the window on it, in a one-window app
-            you have already decided to open, bought nothing. The way in is worth more there.
+            wordmark used to sit. The app’s name is already in the title bar; spending the
+            most legible corner of the window on it, in a one-window app you have already
+            decided to open, bought nothing. The way in is worth more there.
         -->
         <Border Grid.Row="0" Background="#1A1E24" BorderBrush="#22272E" BorderThickness="0,0,0,1"
                 Padding="10,7">
@@ -194,6 +181,22 @@
                             AutomationProperties.Name="Overlay a clip"
                             AutomationProperties.HelpText="Picture-in-picture — asks what to overlay, then you aim it with the playhead." />
 
+                    <!-- Next to the overlay button because it is the second half of the same
+                         job, and disabled until there is a clip for it to move: one being
+                         placed, or a placed one under the playhead. Starts disabled, since
+                         an empty window has neither. The tooltip still shows while it is
+                         disabled — the question a greyed button raises is why, and this is
+                         the only place the answer is written. -->
+                    <Button x:Name="SyncOverlayButton" Style="{StaticResource IconButton}"
+                            Click="OnActionClick"
+                            Content="{StaticResource Icon.SyncAudio}"
+                            Tag="{x:Static input:EditorIntent.SyncOverlayAudio}"
+                            Foreground="#6DD48B"
+                            IsEnabled="False"
+                            ToolTipService.ShowOnDisabled="True"
+                            AutomationProperties.Name="Sync overlay by sound"
+                            AutomationProperties.HelpText="Line the overlay up with the base track by what the two of them heard. Needs an overlay being placed, or one under the playhead." />
+
                     <Border Style="{StaticResource Divider}" />
 
                     <Button Style="{StaticResource IconButton}" Click="OnActionClick"
@@ -209,8 +212,7 @@
                 </StackPanel>
 
                 <!-- What is left on the right is everything that is about the app rather
-                     than about the video: throw the edits away, change the keys, read the
-                     sheet. -->
+                     than about the video: throw the edits away, change the keys. -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button x:Name="ResetButton" Style="{StaticResource DangerIconButton}"
                             Click="OnResetClick"
@@ -218,16 +220,11 @@
                             AutomationProperties.Name="Reset everything"
                             AutomationProperties.HelpText="Discard every edit and go back to the video as you opened it. It asks first." />
 
-                    <Button Style="{StaticResource IconButton}" Click="OnActionClick"
+                    <Button Style="{StaticResource IconButton}" Click="OnActionClick" Margin="0"
                             Content="{StaticResource Icon.Settings}"
                             Tag="{x:Static input:EditorIntent.ToggleSettings}"
                             AutomationProperties.Name="Settings"
                             AutomationProperties.HelpText="Change what the keys do." />
-
-                    <Button Style="{StaticResource IconButton}" Click="OnActionClick" Margin="0"
-                            Content="{StaticResource Icon.Help}"
-                            Tag="{x:Static input:EditorIntent.ToggleHelp}"
-                            AutomationProperties.Name="How it works" />
                 </StackPanel>
             </Grid>
         </Border>
@@ -434,456 +431,8 @@
              play/stop swap for whether it is running, a lit shuttle chip for which way, and
              the label beside them for how fast. -->
         <Border Grid.Row="4" Background="#1A1E24" Padding="12,8">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-
-                <TextBlock x:Name="StatusLabel" Grid.Column="0" Style="{StaticResource StatusText}"
-                           TextTrimming="CharacterEllipsis" />
-                <TextBlock x:Name="HintLabel" Grid.Column="1" Style="{StaticResource StatusText}"
-                           Foreground="#5C6774" Text="F1 shortcuts" />
-            </Grid>
-        </Border>
-
-        <!-- The help sheet. Hand-written prose for the parts that need explaining, and a
-             shortcut reference generated from the same KeyMap the dispatcher resolves
-             against — so the sheet cannot drift out of date with the keys. -->
-        <Border x:Name="HelpOverlay"
-                Grid.RowSpan="5"
-                Background="#F00A0C10"
-                Visibility="Collapsed"
-                MouseLeftButtonDown="OnHelpBackdropClick">
-
-            <Border x:Name="HelpCard"
-                    MaxWidth="1000" MaxHeight="740" Margin="28"
-                    CornerRadius="14" BorderBrush="#2E3846" BorderThickness="1">
-                <Border.RenderTransform>
-                    <TranslateTransform />
-                </Border.RenderTransform>
-                <Border.Background>
-                    <LinearGradientBrush StartPoint="0,0" EndPoint="0.7,1">
-                        <GradientStop Color="#1D242E" Offset="0" />
-                        <GradientStop Color="#12161C" Offset="1" />
-                    </LinearGradientBrush>
-                </Border.Background>
-
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-
-                    <!-- Header -->
-                    <Grid Grid.Row="0" Margin="30,26,22,0">
-                        <StackPanel>
-                            <StackPanel Orientation="Horizontal">
-                                <Ellipse Width="11" Height="11" Fill="#4F9CF5" VerticalAlignment="Center"
-                                         Margin="0,0,11,0" />
-                                <TextBlock Text="BertCut" FontSize="27" FontWeight="Bold" Foreground="#F3F7FC" />
-                            </StackPanel>
-                            <TextBlock Text="Mark a range. Then do one of three things to it."
-                                       FontSize="14" Foreground="#8794A5" Margin="22,7,0,0" />
-                        </StackPanel>
-
-                        <Button HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0"
-                                Style="{StaticResource QuietIconButton}"
-                                Content="{StaticResource Icon.Close}"
-                                AutomationProperties.Name="Close" Click="OnHelpCloseClick" />
-                    </Grid>
-
-                    <ScrollViewer Grid.Row="1" Margin="30,4,20,0" Padding="0,0,10,0"
-                                  VerticalScrollBarVisibility="Auto" Focusable="False">
-                        <StackPanel>
-
-                            <!-- The loop -->
-                            <TextBlock Text="THE LOOP — THREE KEYSTROKES, NO MODIFIERS"
-                                       Style="{StaticResource SectionHead}" Margin="0,14,0,12" />
-
-                            <UniformGrid Columns="4">
-                                <Border Style="{StaticResource Card}">
-                                    <StackPanel>
-                                        <Border Width="24" Height="24" CornerRadius="12" Background="#1E2E46"
-                                                HorizontalAlignment="Left" Margin="0,0,0,12">
-                                            <TextBlock Text="1" Foreground="#7FB4F7" FontSize="12"
-                                                       FontWeight="Bold" HorizontalAlignment="Center"
-                                                       VerticalAlignment="Center" />
-                                        </Border>
-                                        <ContentControl Style="{StaticResource KeyCap}" Content="I" Margin="0,0,0,10" />
-                                        <TextBlock Text="Mark in" Style="{StaticResource CardTitle}" />
-                                        <TextBlock Text="Park the playhead where the boring bit starts."
-                                                   Style="{StaticResource CardBody}" />
-                                    </StackPanel>
-                                </Border>
-
-                                <Border Style="{StaticResource Card}">
-                                    <StackPanel>
-                                        <Border Width="24" Height="24" CornerRadius="12" Background="#1E2E46"
-                                                HorizontalAlignment="Left" Margin="0,0,0,12">
-                                            <TextBlock Text="2" Foreground="#7FB4F7" FontSize="12"
-                                                       FontWeight="Bold" HorizontalAlignment="Center"
-                                                       VerticalAlignment="Center" />
-                                        </Border>
-                                        <ContentControl Style="{StaticResource KeyCap}" Content="O" Margin="0,0,0,10" />
-                                        <TextBlock Text="Mark out" Style="{StaticResource CardTitle}" />
-                                        <TextBlock Text="Where it ends. The strip lights up blue between them."
-                                                   Style="{StaticResource CardBody}" />
-                                    </StackPanel>
-                                </Border>
-
-                                <Border Style="{StaticResource Card}">
-                                    <StackPanel>
-                                        <Border Width="24" Height="24" CornerRadius="12" Background="#1E2E46"
-                                                HorizontalAlignment="Left" Margin="0,0,0,12">
-                                            <TextBlock Text="3" Foreground="#7FB4F7" FontSize="12"
-                                                       FontWeight="Bold" HorizontalAlignment="Center"
-                                                       VerticalAlignment="Center" />
-                                        </Border>
-                                        <ContentControl Style="{StaticResource KeyCap}" Content="X" Margin="0,0,0,10" />
-                                        <TextBlock Text="Ripple delete" Style="{StaticResource CardTitle}" />
-                                        <TextBlock Text="Gone, and everything after it slides left to close the gap."
-                                                   Style="{StaticResource CardBody}" />
-                                    </StackPanel>
-                                </Border>
-
-                                <Border Style="{StaticResource Card}">
-                                    <StackPanel>
-                                        <Border Width="24" Height="24" CornerRadius="12" Background="#2B2438"
-                                                HorizontalAlignment="Left" Margin="0,0,0,12">
-                                            <TextBlock Text="&#x21BA;" Foreground="#B79BE8" FontSize="12"
-                                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                        </Border>
-                                        <ContentControl Style="{StaticResource KeyCap}" Content="Ctrl + Z"
-                                                        Margin="0,0,0,10" />
-                                        <TextBlock Text="Undo, always" Style="{StaticResource CardTitle}" />
-                                        <TextBlock Text="200 levels deep, including a reset. Nothing here is a one-way door."
-                                                   Style="{StaticResource CardBody}" />
-                                    </StackPanel>
-                                </Border>
-                            </UniformGrid>
-
-                            <!-- The three operations. Each accent matches the colour that
-                                 operation is drawn in on the timeline. -->
-                            <TextBlock Text="THE THREE OPERATIONS" Style="{StaticResource SectionHead}" />
-
-                            <UniformGrid Columns="3">
-                                <Border Style="{StaticResource Card}" Padding="18">
-                                    <StackPanel>
-                                        <Border Height="3" Width="36" CornerRadius="2" Background="#FF5C5C"
-                                                HorizontalAlignment="Left" Margin="0,0,0,14" />
-                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                            <ContentControl Style="{StaticResource KeyCap}" Content="X" />
-                                            <ContentControl Style="{StaticResource KeyCap}" Content="Shift + Del"
-                                                            Margin="6,0,0,0" />
-                                        </StackPanel>
-                                        <TextBlock Text="Cut it out" Style="{StaticResource CardTitle}" />
-                                        <TextBlock Style="{StaticResource CardBody}"
-                                                   Text="The marked range disappears and the timeline closes up behind it. Press ↑ and ↓ afterwards to hop between the seams and check the join." />
-                                    </StackPanel>
-                                </Border>
-
-                                <Border Style="{StaticResource Card}" Padding="18">
-                                    <StackPanel>
-                                        <Border Height="3" Width="36" CornerRadius="2" Background="#F2A14C"
-                                                HorizontalAlignment="Left" Margin="0,0,0,14" />
-                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                            <ContentControl Style="{StaticResource KeyCap}" Content="C" />
-                                        </StackPanel>
-                                        <TextBlock Text="Crop and zoom" Style="{StaticResource CardTitle}" />
-                                        <TextBlock Style="{StaticResource CardBody}"
-                                                   Text="Draw a box over the part worth seeing. For the length of the marked range it zooms to fill the frame, then reverts. With nothing marked it crops the whole video. Locked to the output ratio, so it never letterboxes." />
-                                    </StackPanel>
-                                </Border>
-
-                                <Border Style="{StaticResource Card}" Padding="18">
-                                    <StackPanel>
-                                        <Border Height="3" Width="36" CornerRadius="2" Background="#6DD48B"
-                                                HorizontalAlignment="Left" Margin="0,0,0,14" />
-                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                            <ContentControl Style="{StaticResource KeyCap}" Content="P" />
-                                            <ContentControl Style="{StaticResource KeyCap}" Content="Ctrl + I"
-                                                            Margin="6,0,0,0" />
-                                            <ContentControl Style="{StaticResource KeyCap}" Content="A"
-                                                            Margin="6,0,0,0" />
-                                        </StackPanel>
-                                        <TextBlock Text="Overlay a clip" Style="{StaticResource CardTitle}" />
-                                        <TextBlock Style="{StaticResource CardBody}"
-                                                   Text="P asks what to overlay: the marked range, the segment you have selected, or a video file taken whole. That settles the clip and its length. Then move the playhead — the faint band on the strip is where it would land, and A puts it where the sound matches the base track, which for the same event filmed twice is the whole job. Enter places it, and it becomes the green band on the timeline — see below for what you can do to it there." />
-                                    </StackPanel>
-                                </Border>
-                            </UniformGrid>
-
-                            <!-- The strip. Worth its own section since the track started
-                                 answering to clicks: which lane you press in decides what
-                                 the press means, and that is not guessable. -->
-                            <TextBlock Text="THE TIMELINE STRIP  ·  WHAT A CLICK DOES WHERE"
-                                       Style="{StaticResource SectionHead}" />
-
-                            <!-- Named so the harness can capture this section on its own:
-                                 it sits below the fold of a sheet that cannot be scrolled
-                                 from a script. -->
-                            <UniformGrid x:Name="StripHelp" Columns="3">
-                                <Border Style="{StaticResource Card}" Padding="18">
-                                    <StackPanel>
-                                        <Border Height="3" Width="36" CornerRadius="2" Background="#8D9BAC"
-                                                HorizontalAlignment="Left" Margin="0,0,0,14" />
-                                        <TextBlock Text="The ruler, and the waveform"
-                                                   Style="{StaticResource CardTitle}" />
-                                        <TextBlock Style="{StaticResource CardBody}"
-                                                   Text="The lane above the track and the sound below it. Press or drag anywhere in either and the playhead follows — these are the only two places that move it. Nothing here selects anything, so this is also how you let go of what is selected." />
-                                    </StackPanel>
-                                </Border>
-
-                                <Border Style="{StaticResource Card}" Padding="18">
-                                    <StackPanel>
-                                        <Border Height="3" Width="36" CornerRadius="2" Background="#505E70"
-                                                HorizontalAlignment="Left" Margin="0,0,0,14" />
-                                        <TextBlock Text="The track — your clips"
-                                                   Style="{StaticResource CardTitle}" />
-                                        <TextBlock Style="{StaticResource CardBody}"
-                                                   Text="Every piece the cuts have left, in alternating shades. Click one to pick it out — the playhead stays where it is, so choosing a clip never costs you your place. Delete ripples it away and closes the gap. Drag it and it changes places with its neighbours: the running order of the film, rearranged by hand." />
-                                    </StackPanel>
-                                </Border>
-
-                                <Border Style="{StaticResource Card}" Padding="18">
-                                    <StackPanel>
-                                        <Border Height="3" Width="36" CornerRadius="2" Background="#6DD48B"
-                                                HorizontalAlignment="Left" Margin="0,0,0,14" />
-                                        <TextBlock Text="The green band — overlays"
-                                                   Style="{StaticResource CardTitle}" />
-                                        <TextBlock Style="{StaticResource CardBody}"
-                                                   Text="Along the bottom of the track, wherever you have placed one. Click to pick it out, drag its middle to move it, drag either end — the darker ones — to trim it. What it shows stays put while you trim, so a synced overlay stays synced. Delete takes it off." />
-                                    </StackPanel>
-                                </Border>
-                            </UniformGrid>
-
-                            <!-- Placement -->
-                            <TextBlock Text="PLACING A BOX  ·  AFTER C OR P" Style="{StaticResource SectionHead}" />
-
-                            <Border Style="{StaticResource Card}" Padding="18">
-                                <StackPanel>
-                                    <TextBlock Style="{StaticResource CardBody}" Margin="0,0,0,14"
-                                               Text="Both operations drop you into the same placement box, and both are aspect-locked — a crop to the output ratio, an overlay to its own source's — so resizing is one pair of keys instead of four. Drag the box to move it, drag a corner handle to resize it, or drag anywhere outside it to draw a new one." />
-                                    <UniformGrid Columns="3">
-                                        <StackPanel Orientation="Horizontal" Margin="0,0,10,8">
-                                            <ContentControl Style="{StaticResource KeyCap}" Content="← ↑ → ↓" />
-                                            <TextBlock Text="move" Style="{StaticResource CardBody}"
-                                                       Margin="9,0,0,0" VerticalAlignment="Center" />
-                                        </StackPanel>
-                                        <StackPanel Orientation="Horizontal" Margin="0,0,10,8">
-                                            <ContentControl Style="{StaticResource KeyCap}" Content="Shift + ↑ ↓" />
-                                            <TextBlock Text="resize" Style="{StaticResource CardBody}"
-                                                       Margin="9,0,0,0" VerticalAlignment="Center" />
-                                        </StackPanel>
-                                        <StackPanel Orientation="Horizontal" Margin="0,0,10,8">
-                                            <ContentControl Style="{StaticResource KeyCap}" Content="1 – 5" />
-                                            <TextBlock Text="snap to a corner or the centre"
-                                                       Style="{StaticResource CardBody}"
-                                                       Margin="9,0,0,0" VerticalAlignment="Center" />
-                                        </StackPanel>
-                                        <StackPanel Orientation="Horizontal" Margin="0,0,10,8">
-                                            <ContentControl Style="{StaticResource KeyCap}" Content="Alt + ← →" />
-                                            <TextBlock Text="slide an overlay's content to sync it"
-                                                       Style="{StaticResource CardBody}"
-                                                       Margin="9,0,0,0" VerticalAlignment="Center" />
-                                        </StackPanel>
-                                        <StackPanel Orientation="Horizontal" Margin="0,0,10,8">
-                                            <ContentControl Style="{StaticResource KeyCap}" Content="Enter" />
-                                            <TextBlock Text="apply" Style="{StaticResource CardBody}"
-                                                       Margin="9,0,0,0" VerticalAlignment="Center" />
-                                        </StackPanel>
-                                        <StackPanel Orientation="Horizontal" Margin="0,0,10,8">
-                                            <ContentControl Style="{StaticResource KeyCap}" Content="Esc" />
-                                            <TextBlock Text="cancel" Style="{StaticResource CardBody}"
-                                                       Margin="9,0,0,0" VerticalAlignment="Center" />
-                                        </StackPanel>
-                                    </UniformGrid>
-                                </StackPanel>
-                            </Border>
-
-                            <!-- Toolbar -->
-                            <TextBlock Text="THE TOOLBAR" Style="{StaticResource SectionHead}" />
-
-                            <UniformGrid Columns="3">
-                                <Border Style="{StaticResource Card}">
-                                    <StackPanel>
-                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                            <Path Style="{StaticResource CardIcon}" Data="{StaticResource Icon.MarkIn}"
-                                                  Fill="#4F9CF5" />
-                                            <Path Style="{StaticResource CardIcon}" Data="{StaticResource Icon.RippleDelete}"
-                                                  Fill="#F27B7B" />
-                                            <Path Style="{StaticResource CardIcon}" Data="{StaticResource Icon.Crop}"
-                                                  Fill="#F2A14C" />
-                                            <Path Style="{StaticResource CardIcon}" Data="{StaticResource Icon.Overlay}"
-                                                  Fill="#6DD48B" />
-                                        </StackPanel>
-                                        <TextBlock Text="The editing icons" Style="{StaticResource CardTitle}" />
-                                        <TextBlock Style="{StaticResource CardBody}"
-                                                   Text="Mark in and out, cut, split, crop, overlay, undo, redo — the keys above, as buttons. Hover one and it tells you its key, whatever you have since changed that key to." />
-                                    </StackPanel>
-                                </Border>
-
-                                <Border Style="{StaticResource Card}">
-                                    <StackPanel>
-                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                            <Path Style="{StaticResource CardIcon}" Data="{StaticResource Icon.Add}"
-                                                  Margin="0,0,8,0" />
-                                            <TextBlock Text="Add video" Style="{StaticResource CardTitle}"
-                                                       Margin="0" VerticalAlignment="Center" />
-                                        </StackPanel>
-                                        <TextBlock Style="{StaticResource CardBody}"
-                                                   Text="The one button here with its name written on it, first in the row. Joins a file onto the end of the timeline as a new segment, scaled to the project's frame. Ctrl+A does the same." />
-                                    </StackPanel>
-                                </Border>
-
-                                <Border Style="{StaticResource Card}">
-                                    <StackPanel>
-                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                            <Path Style="{StaticResource CardIcon}" Data="{StaticResource Icon.Save}"
-                                                  Margin="0,0,8,0" />
-                                            <TextBlock Text="Save as" Style="{StaticResource CardTitle}"
-                                                       Margin="0" VerticalAlignment="Center" />
-                                        </StackPanel>
-                                        <TextBlock Style="{StaticResource CardBody}"
-                                                   Text="Writes the edited video out to a file you name, picking the fast path automatically. Your original is never written to. Ctrl+E does the same." />
-                                    </StackPanel>
-                                </Border>
-
-                                <Border Style="{StaticResource Card}">
-                                    <StackPanel>
-                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                            <Path Style="{StaticResource CardIcon}" Data="{StaticResource Icon.Clear}"
-                                                  Fill="#FF8B8B" Margin="0,0,8,0" />
-                                            <TextBlock Text="Close everything" Style="{StaticResource CardTitle}"
-                                                       Margin="0" VerticalAlignment="Center" />
-                                        </StackPanel>
-                                        <TextBlock Style="{StaticResource CardBody}"
-                                                   Text="Empties the window and lets go of the video files, so you can move, rename or delete them without closing BertCut. Your edits are saved against each video on the way out and come back when you open it again. It asks first, and it has no key." />
-                                    </StackPanel>
-                                </Border>
-
-                                <Border Style="{StaticResource Card}">
-                                    <StackPanel>
-                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                            <Path Style="{StaticResource CardIcon}" Data="{StaticResource Icon.Reset}"
-                                                  Fill="#FF8B8B" Margin="0,0,8,0" />
-                                            <TextBlock Text="Reset everything" Style="{StaticResource CardTitle}"
-                                                       Margin="0" VerticalAlignment="Center" />
-                                        </StackPanel>
-                                        <TextBlock Style="{StaticResource CardBody}"
-                                                   Text="Drops every cut, crop, overlay and added clip, back to the video as you opened it. It asks first, and Ctrl+Z still brings it all back. The only action with no key of its own." />
-                                    </StackPanel>
-                                </Border>
-
-                                <Border Style="{StaticResource Card}">
-                                    <StackPanel>
-                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                            <Path Style="{StaticResource CardIcon}" Data="{StaticResource Icon.Settings}"
-                                                  Margin="0,0,8,0" />
-                                            <TextBlock Text="Settings" Style="{StaticResource CardTitle}"
-                                                       Margin="0" VerticalAlignment="Center" />
-                                        </StackPanel>
-                                        <TextBlock Style="{StaticResource CardBody}"
-                                                   Text="Controls: every key in this sheet, and every key that places a box, on a page where you can move it somewhere that suits your hands. Ctrl+, opens it." />
-                                    </StackPanel>
-                                </Border>
-
-                                <Border Style="{StaticResource Card}">
-                                    <StackPanel>
-                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                            <Path Style="{StaticResource CardIcon}" Data="{StaticResource Icon.Help}"
-                                                  Margin="0,0,8,0" />
-                                            <TextBlock Text="How it works" Style="{StaticResource CardTitle}"
-                                                       Margin="0" VerticalAlignment="Center" />
-                                        </StackPanel>
-                                        <TextBlock Style="{StaticResource CardBody}"
-                                                   Text="This sheet. F1 opens and closes it too, from anywhere — including mid-crop." />
-                                    </StackPanel>
-                                </Border>
-                            </UniformGrid>
-
-                            <!-- Export -->
-                            <TextBlock Text="GETTING IT OUT" Style="{StaticResource SectionHead}" />
-
-                            <Border Style="{StaticResource Card}" Padding="18">
-                                <!-- A Grid, not a horizontal StackPanel: that would hand the
-                                     paragraph infinite width and it would never wrap. -->
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <ContentControl Grid.Column="0" Style="{StaticResource KeyCap}"
-                                                    Content="Ctrl + E"
-                                                    VerticalAlignment="Top" Margin="0,2,16,0" />
-                                    <StackPanel Grid.Column="1">
-                                        <TextBlock Text="Save as" Style="{StaticResource CardTitle}" />
-                                        <TextBlock Style="{StaticResource CardBody}"
-                                                   Text="If you only cut, the video is copied rather than re-encoded and it runs at roughly file-copy speed. Add a crop or an overlay and only the kept frames are re-encoded. It always writes a new file — the video you opened is never modified. There is no Save button for the edits themselves: those autosave against the video's content and come back the next time you open it." />
-                                    </StackPanel>
-                                </Grid>
-                            </Border>
-
-                            <!-- Generated from the key map -->
-                            <TextBlock Text="EVERY SHORTCUT" Style="{StaticResource SectionHead}" />
-
-                            <ItemsControl x:Name="HelpList" Focusable="False" Margin="0,0,0,10">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <UniformGrid Columns="2" />
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Border Style="{StaticResource Card}">
-                                            <StackPanel>
-                                                <TextBlock Text="{Binding Key}" Foreground="#4F9CF5"
-                                                           FontSize="12" FontWeight="SemiBold"
-                                                           Margin="0,0,0,12" />
-                                                <ItemsControl ItemsSource="{Binding}" Focusable="False">
-                                                    <ItemsControl.ItemTemplate>
-                                                        <DataTemplate>
-                                                            <Grid Margin="0,3">
-                                                                <Grid.ColumnDefinitions>
-                                                                    <!-- Wide enough for the
-                                                                         longest gesture the key
-                                                                         map can produce,
-                                                                         Ctrl + Shift + Z. -->
-                                                                    <ColumnDefinition Width="156" />
-                                                                    <ColumnDefinition Width="*" />
-                                                                </Grid.ColumnDefinitions>
-                                                                <ContentControl Grid.Column="0"
-                                                                                Style="{StaticResource KeyCap}"
-                                                                                Content="{Binding Gesture}" />
-                                                                <TextBlock Grid.Column="1"
-                                                                           Text="{Binding Description}"
-                                                                           Foreground="#96A3B3" FontSize="12"
-                                                                           TextWrapping="Wrap"
-                                                                           VerticalAlignment="Center" />
-                                                            </Grid>
-                                                        </DataTemplate>
-                                                    </ItemsControl.ItemTemplate>
-                                                </ItemsControl>
-                                            </StackPanel>
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </StackPanel>
-                    </ScrollViewer>
-
-                    <Border Grid.Row="2" BorderBrush="#242C36" BorderThickness="0,1,0,0" Padding="30,14">
-                        <Grid>
-                            <TextBlock Foreground="#6C7A8B" FontSize="12"
-                                       Text="No Save button — everything autosaves against the video you opened." />
-                            <TextBlock HorizontalAlignment="Right" Foreground="#4E5B6B" FontSize="12"
-                                       Text="Esc or F1 to close" />
-                        </Grid>
-                    </Border>
-                </Grid>
-            </Border>
+            <TextBlock x:Name="StatusLabel" Style="{StaticResource StatusText}"
+                       TextTrimming="CharacterEllipsis" />
         </Border>
 
         <!-- The settings screen, over the editor rather than in a window of its own: it is

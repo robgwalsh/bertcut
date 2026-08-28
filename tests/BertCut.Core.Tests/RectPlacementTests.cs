@@ -6,10 +6,17 @@ namespace BertCut.Core.Tests;
 /// Placement geometry for crop and overlay rectangles.
 /// </summary>
 /// <remarks>
-/// The aspect lock is not cosmetic: <see cref="ProjectInvariants"/> rejects a crop whose
-/// ratio does not match the output exactly, because that is what lets zoom-to-fill be a
-/// plain crop-then-scale with no pad branch in either renderer. So every operation here
-/// has to preserve the ratio, not merely approximate it.
+/// <para>
+/// The aspect lock is not cosmetic, and it is the <b>overlay's</b>: a clip's box is held to
+/// the ratio of the picture going into it, so what lands is never stretched. Approximating
+/// the ratio is not enough — a rounded height leaves a sliver of stretch that a run of
+/// resizes accumulates — so every locked operation here preserves it exactly. The tests that
+/// pass the frame's own dimensions as the ratio are exercising that path.
+/// </para>
+/// <para>
+/// A crop asks for the free shape instead, and its rules are the frame, the minimum size and
+/// an even edge. Both halves are held in place below.
+/// </para>
 /// </remarks>
 public class RectPlacementTests
 {
@@ -244,5 +251,116 @@ public class RectPlacementTests
 
         Assert.True(w <= FrameW && h <= FrameH);
         AssertMatchesOutputAspect(new RectI(0, 0, w, h));
+    }
+
+    // ---- the free shape a crop asks for --------------------------------------------
+
+    [Fact]
+    public void A_free_drag_keeps_both_of_the_edges_that_were_drawn()
+    {
+        // The locked path answers a 500x100 drag with a 5:3 rectangle. Free, the drag is
+        // the answer, which is the whole of the feature.
+        var rect = RectPlacement.FromDrag(200, 100, 700, 200, 0, 0, FrameW, FrameH);
+
+        Assert.Equal(new RectI(200, 100, 500, 100), rect);
+        AssertInsideFrame(rect);
+    }
+
+    [Theory]
+    [InlineData(201, 101, 703, 205)]
+    [InlineData(0, 0, 1279, 767)]
+    [InlineData(640, 384, 641, 385)]
+    public void A_free_rectangle_always_has_even_edges(int x0, int y0, int x1, int y1)
+    {
+        // ffmpeg's crop filter fails outright on an odd dimension with yuv420p, and a
+        // whole-timeline crop's size goes on to be the delivered one.
+        var dragged = RectPlacement.FromDrag(x0, y0, x1, y1, 0, 0, FrameW, FrameH);
+        var cornered = RectPlacement.FromCorner(x0, y0, x1, y1, 0, 0, FrameW, FrameH);
+
+        Assert.Equal(0, dragged.W % 2);
+        Assert.Equal(0, dragged.H % 2);
+        Assert.Equal(0, cornered.W % 2);
+        Assert.Equal(0, cornered.H % 2);
+        AssertInsideFrame(dragged);
+        AssertInsideFrame(cornered);
+    }
+
+    [Fact]
+    public void A_free_corner_drag_reshapes_one_edge_without_touching_the_other()
+    {
+        // The one gesture that can change a crop's ratio at all: the keyboard has grow and
+        // shrink, which move both edges together.
+        var cornered = RectPlacement.FromCorner(200, 120, 900, 200, 0, 0, FrameW, FrameH);
+
+        Assert.Equal(new RectI(200, 120, 700, 80), cornered);
+    }
+
+    [Fact]
+    public void A_free_rectangle_produced_by_placement_satisfies_the_project_invariant()
+    {
+        // The end-to-end check: a shape the output is not must still be acceptable to the
+        // model, which is what the aspect lock used to prevent.
+        var rect = RectPlacement.FromDrag(100, 50, 420, 700, 0, 0, FrameW, FrameH);
+        var p = TestProjects.Single(300);
+
+        var cropped = Edits.TimelineEdits.SetCrop(p, new Time.FrameRange(0, 100), rect);
+
+        Assert.Null(ProjectInvariants.Validate(cropped));
+        Assert.True(rect.H > rect.W, "a portrait crop of a landscape frame is the point");
+    }
+
+    [Theory]
+    [InlineData(1.1)]
+    [InlineData(1.5)]
+    [InlineData(0.9)]
+    [InlineData(0.5)]
+    public void Resizing_a_free_rectangle_scales_both_edges_and_keeps_it_usable(double factor)
+    {
+        // Locked, one press changes one dimension and the other follows the ratio. Free,
+        // both are scaled — and the shape has to be roughly kept, or grow and shrink would
+        // walk a tall crop back towards the output's own shape. Small enough that the
+        // largest factor here still fits the frame, since the frame wins over the shape.
+        var rect = new RectI(300, 100, 200, 300);
+
+        var resized = RectPlacement.Resize(rect, factor, FrameW, FrameH, lockAspect: false);
+
+        AssertInsideFrame(resized);
+        Assert.Equal(0, resized.W % 2);
+        Assert.Equal(0, resized.H % 2);
+        Assert.InRange((double)resized.W / resized.H, (200.0 / 300) - 0.02, (200.0 / 300) + 0.02);
+    }
+
+    [Fact]
+    public void Resizing_a_free_rectangle_actually_moves_on_every_press()
+    {
+        // The reason free resizing does not go through FitAspect: 400x798 reduces to
+        // 400:798, which fits inside the frame exactly once, so every press would clamp to
+        // that single step and the key would silently do nothing.
+        var rect = new RectI(400, 100, 400, 598);
+
+        var grown = RectPlacement.Resize(rect, 1.1, FrameW, FrameH, lockAspect: false);
+        var shrunk = RectPlacement.Resize(rect, 1 / 1.1, FrameW, FrameH, lockAspect: false);
+
+        Assert.True(grown.W > rect.W, $"grow left {rect} at {grown}");
+        Assert.True(shrunk.W < rect.W, $"shrink left {rect} at {shrunk}");
+    }
+
+    [Fact]
+    public void Repeated_free_resizing_never_escapes_the_frame_or_collapses()
+    {
+        var rect = new RectI(300, 100, 400, 600);
+
+        for (var i = 0; i < 40; i++)
+        {
+            rect = RectPlacement.Resize(rect, 1.1, FrameW, FrameH, lockAspect: false);
+            AssertInsideFrame(rect);
+        }
+
+        for (var i = 0; i < 40; i++)
+        {
+            rect = RectPlacement.Resize(rect, 1 / 1.1, FrameW, FrameH, lockAspect: false);
+            AssertInsideFrame(rect);
+            Assert.True(rect.W >= 2 && rect.H >= 2);
+        }
     }
 }

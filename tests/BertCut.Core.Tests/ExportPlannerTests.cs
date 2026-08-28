@@ -249,7 +249,8 @@ public class ExportPlannerTests
     [Fact]
     public void Crop_scales_back_to_the_output_size_with_no_pad_filter()
     {
-        // Crop rects are aspect-locked to the output, so zoom-to-fill never letterboxes.
+        // A crop over part of the timeline zooms to fill: one stretch of an edit does not
+        // get a resolution of its own, so there is nothing for a pad to do here either.
         var segment = new FlatSegment(
             new FrameRange(0, 100), SourceId: 1, SourceStartFrame: 0,
             Crop: new RectI(100, 60, 640, 384), Overlay: null, OverlaySourceStartFrame: 0);
@@ -259,6 +260,65 @@ public class ExportPlannerTests
         Assert.Contains("crop=640:384:100:60", graph);
         Assert.Contains("scale=1280:768", graph);
         Assert.DoesNotContain("pad=", graph);
+    }
+
+    [Fact]
+    public void A_crop_over_the_whole_timeline_is_delivered_at_its_own_size()
+    {
+        // The free shape has to land somewhere. A tall crop of a landscape recording is
+        // delivered tall — stretching it back to 1280x768 is the one thing a crop must
+        // never do, and padding it would deliver a frame mostly made of black.
+        var p = TimelineEdits.SetCrop(
+            TestProjects.Single(300), new FrameRange(0, 300), new RectI(400, 0, 432, 768));
+
+        Assert.Equal((432, 768), p.DeliveredSize);
+
+        var graph = ValueAfter(PlanFor(p).Steps[0].Arguments, "-filter_complex");
+
+        Assert.Contains("crop=432:768:400:0", graph);
+        Assert.Contains("scale=432:768", graph);
+        Assert.DoesNotContain("pad=", graph);
+    }
+
+    [Fact]
+    public void A_crop_over_part_of_the_timeline_leaves_the_delivered_size_alone()
+    {
+        // Every segment of one file has to come out the same size, or the concat that joins
+        // them has two stream descriptions to reconcile and no way to do it.
+        var p = TimelineEdits.SetCrop(
+            TestProjects.Single(300), new FrameRange(0, 100), new RectI(400, 0, 432, 768));
+
+        Assert.Equal((1280, 768), p.DeliveredSize);
+
+        // The video steps, which are the ones that map [vout]; the audio is built in one
+        // pass of its own and has a filter graph too.
+        var rendered = PlanFor(p).Steps.Where(s => Find(s.Arguments, "[vout]") >= 0).ToList();
+
+        Assert.NotEmpty(rendered);
+        Assert.All(rendered, s =>
+            Assert.Contains("scale=1280:768", ValueAfter(s.Arguments, "-filter_complex")));
+    }
+
+    [Fact]
+    public void An_overlay_of_a_cut_out_region_crops_its_own_input_first()
+    {
+        // Src is in the source's own pixels, which is exactly what crop wants — the
+        // rectangle needs no mapping on the way here, and so has nothing to round.
+        var segment = new FlatSegment(
+            new FrameRange(0, 100), SourceId: 1, SourceStartFrame: 0,
+            Crop: null,
+            Overlay: new OverlayClip(
+                new FrameRange(0, 100), 1, 0,
+                Dest: new RectI(0, 0, 640, 384), Src: new RectI(320, 192, 320, 192)),
+            OverlaySourceStartFrame: 0);
+
+        var graph = FfmpegArgs.BuildFilterGraph(segment, TestProjects.Output1280, hasOverlay: true);
+
+        Assert.Contains("[1:v]crop=320:192:320:192,scale=640:384", graph);
+
+        // The base is still shown whole underneath it: cutting a region out to lay it back
+        // over the picture must not take it out of the picture as well.
+        Assert.DoesNotContain("[0:v]crop=", graph);
     }
 
     [Fact]

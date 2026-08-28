@@ -165,12 +165,12 @@ public class KeyBindingsTests
     }
 
     [Fact]
-    public void The_help_sheet_shows_the_keys_the_user_chose()
+    public void The_controls_page_shows_the_keys_the_user_chose()
     {
         var bindings = KeyBindings.Default
             .Rebind(Entry(KeyBindings.Default, EditorIntent.BeginCrop), EditorKey.R, EditorModifiers.None).Bindings;
 
-        var gestures = bindings.ForHelp().SelectMany(g => g).Select(GestureText.Format).ToList();
+        var gestures = bindings.ForSettings().SelectMany(g => g).Select(e => e.Gesture).ToList();
 
         Assert.Contains("R", gestures);
         Assert.DoesNotContain("C", gestures);

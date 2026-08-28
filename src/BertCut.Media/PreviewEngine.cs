@@ -134,13 +134,18 @@ public sealed class PreviewEngine : IDisposable
         var baseFrame = Decode(project, resolution.SourceId, resolution.SourceFrame, native);
         if (baseFrame is null) return false;
 
-        if (resolution.Crop is { } crop) ZoomCropInto(baseFrame, crop, target);
+        if (resolution.Crop is { } crop) ZoomCropInto(baseFrame, crop, _output, target);
         else Array.Copy(baseFrame.Pixels, target.Pixels, target.Pixels.Length);
 
         if (resolution.Overlay is { } overlay)
         {
             var overlayFrame = Decode(project, overlay.SourceId, resolution.OverlaySourceFrame, native: true);
-            if (overlayFrame is not null) BlitInto(overlayFrame, overlay.Dest, target, _output);
+
+            // The canvas is the delivered frame at whatever size it is being previewed, so
+            // that is the space the clip's destination is in — see BlitInto.
+            var (deliveredWidth, deliveredHeight) = project.DeliveredSize;
+            if (overlayFrame is not null)
+                BlitInto(overlayFrame, overlay.Dest, overlay.Src, target, deliveredWidth, deliveredHeight);
         }
 
         target.FrameIndex = timelineFrame;
@@ -232,16 +237,24 @@ public sealed class PreviewEngine : IDisposable
     /// Scales a crop rectangle up to fill the canvas.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Nearest-neighbour, because this runs per preview frame and the export does the
     /// same operation with a proper Lanczos filter. The preview is slightly softer than
     /// the exported result in this one respect, which is the right trade for a preview
     /// that has to keep up with playback.
+    /// </para>
+    /// <para>
+    /// The crop is mapped onto the source through the <b>output</b> size rather than through
+    /// the canvas, which are proportional right up until a whole-timeline crop makes the
+    /// canvas the crop's own shape instead of the output's. Reading the ratio off the canvas
+    /// then maps the rectangle through its own effect and lands somewhere else entirely.
+    /// </para>
     /// </remarks>
-    private static void ZoomCropInto(DecodedFrame source, RectI crop, DecodedFrame canvas)
+    private static void ZoomCropInto(DecodedFrame source, RectI crop, OutputFormat output, DecodedFrame canvas)
     {
         // The crop is expressed in output-space pixels; map it onto the source's own grid.
-        var scaleX = (double)source.Width / canvas.Width;
-        var scaleY = (double)source.Height / canvas.Height;
+        var scaleX = (double)source.Width / output.Width;
+        var scaleY = (double)source.Height / output.Height;
 
         var sx0 = crop.X * scaleX;
         var sy0 = crop.Y * scaleY;
@@ -268,18 +281,30 @@ public sealed class PreviewEngine : IDisposable
         }
     }
 
-    /// <summary>Draws the overlay into its destination rectangle, scaling to fit.</summary>
+    /// <summary>Draws the overlay, or a region cut out of it, into its destination.</summary>
     /// <remarks>
-    /// The destination is in output-space pixels, so it is mapped onto the canvas rather
+    /// <para>
+    /// The destination is in <b>delivered</b> pixels, so it is mapped onto the canvas rather
     /// than used directly — a preview rendered at half size puts the clip in the same place,
-    /// half as large.
+    /// half as large. Delivered rather than output because a whole-timeline crop changes what
+    /// the finished frame is, and the clip lands on the finished frame.
+    /// </para>
+    /// <para>
+    /// <paramref name="src"/> is a region of the source's own picture, so it needs no mapping
+    /// at all: it names pixels of the frame just decoded. Absent, the whole frame is the
+    /// region, which is the same arithmetic with a different origin.
+    /// </para>
     /// </remarks>
-    private static void BlitInto(DecodedFrame source, RectI dest, DecodedFrame canvas, OutputFormat output)
+    private static void BlitInto(
+        DecodedFrame source, RectI dest, RectI? src, DecodedFrame canvas, int deliveredWidth, int deliveredHeight)
     {
-        if (dest.W <= 0 || dest.H <= 0) return;
+        if (dest.W <= 0 || dest.H <= 0 || deliveredWidth <= 0 || deliveredHeight <= 0) return;
 
-        var toCanvasX = (double)canvas.Width / output.Width;
-        var toCanvasY = (double)canvas.Height / output.Height;
+        var region = src ?? new RectI(0, 0, source.Width, source.Height);
+        if (region.W <= 0 || region.H <= 0) return;
+
+        var toCanvasX = (double)canvas.Width / deliveredWidth;
+        var toCanvasY = (double)canvas.Height / deliveredHeight;
 
         var destX = dest.X * toCanvasX;
         var destY = dest.Y * toCanvasY;
@@ -288,8 +313,8 @@ public sealed class PreviewEngine : IDisposable
 
         if (destW < 1 || destH < 1) return;
 
-        var stepX = source.Width / destW;
-        var stepY = source.Height / destH;
+        var stepX = region.W / destW;
+        var stepY = region.H / destH;
 
         var x0 = Math.Max(0, (int)destX);
         var y0 = Math.Max(0, (int)destY);
@@ -298,13 +323,13 @@ public sealed class PreviewEngine : IDisposable
 
         for (var y = y0; y < y1; y++)
         {
-            var sourceY = Math.Clamp((int)((y - destY) * stepY), 0, source.Height - 1);
+            var sourceY = Math.Clamp(region.Y + (int)((y - destY) * stepY), 0, source.Height - 1);
             var sourceRow = sourceY * source.Stride;
             var targetRow = y * canvas.Stride;
 
             for (var x = x0; x < x1; x++)
             {
-                var sourceX = Math.Clamp((int)((x - destX) * stepX), 0, source.Width - 1);
+                var sourceX = Math.Clamp(region.X + (int)((x - destX) * stepX), 0, source.Width - 1);
                 var s = sourceRow + (sourceX * 4);
                 var t = targetRow + (x * 4);
 

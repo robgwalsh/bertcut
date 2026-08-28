@@ -1,0 +1,95 @@
+# A crop is any shape the user draws, and the shape decides what comes out.
+#
+# Both halves are mouse-led, because the keyboard can move and scale a box but never
+# reshape one: `draw-rect` and `drag-rect-corner` are the only gestures that give a crop a
+# ratio of its own. A run that only pressed keys would pass whether the box had a free
+# shape or had quietly snapped back to the output's.
+
+sample clip.mp4 6
+open clip.mp4
+assert-has-media
+assert-delivered 640x360
+
+# ---- a tall crop of the whole video is delivered tall --------------------------------
+
+key C
+assert-mode Crop
+
+# Drawn from a corner of the frame, so the press lands outside the box already on screen
+# and draws a new one rather than moving that one.
+draw-rect 20 20 260 340
+assert-crop 240x320+20+20
+shot 01-tall-crop-drawn
+
+key Enter
+assert-mode Normal
+
+# The crop covers the whole timeline, so the crop's own size is what the file comes out
+# at — a portrait strip is delivered portrait rather than stretched back to landscape.
+assert-crop 240x320+20+20
+assert-delivered 240x320
+shot 02-tall-crop-applied
+dump-preview 03-tall-crop.png
+
+key Ctrl+Z
+assert-delivered 640x360
+
+# ---- a corner handle reshapes one edge and leaves the other -------------------------
+
+key C
+draw-rect 20 20 420 260
+assert-crop 400x240+20+20
+
+# Pull the bottom-right corner down: the width it was given stays where it was.
+drag-rect-corner 420 260 420 340
+assert-crop 400x320+20+20
+key Escape
+assert-mode Normal
+
+# ---- Shift holds the box to the video's own shape -----------------------------------
+
+# The clip is 640x360, so a box drawn under Shift comes back 16:9 exactly. It covers what
+# was dragged rather than fitting inside it: nothing the pointer went over is given up.
+key C
+draw-rect 20 20 260 340 shift
+assert-crop 576x324+0+18
+shot 06-shift-snapped
+key Escape
+
+# The same on a corner handle, and the modifier is read on every move rather than at the
+# press — so it can be taken up partway through a drag, and let go of again.
+key C
+draw-rect 20 20 420 260
+assert-crop 400x240+20+20
+drag-rect-corner 420 260 500 340 shift
+assert-crop 576x324+20+20
+drag-rect-corner 596 344 420 260
+assert-crop 400x240+20+20
+key Escape
+assert-mode Normal
+
+# ---- the same rectangle, laid back over the video instead ---------------------------
+
+goto 60
+key C
+draw-rect 340 20 620 220
+assert-crop 280x200+340+20
+
+# O takes the drawn region into overlay placement rather than cropping to it: the region
+# becomes what the clip shows, and the box that follows is where it lands.
+key O
+assert-mode Overlay
+assert-overlay-src 280x200+340+20
+
+key 1
+key Enter
+assert-mode Normal
+assert-overlays 1
+
+# The output is untouched — a cut-out is laid over the picture, not taken out of it.
+assert-delivered 640x360
+assert-overlay-src 280x200+340+20
+shot 04-region-overlaid
+dump-preview 05-region-overlaid.png
+
+state
