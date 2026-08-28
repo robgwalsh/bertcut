@@ -858,6 +858,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
             case EditorIntent.SnapCenter: SnapTo(Anchor.Centre); break;
 
             case EditorIntent.SyncOverlayAudio: SyncOverlayAudio(); break;
+            case EditorIntent.TakeNextAudioMatch: TakeNextAudioMatch(); break;
 
             case EditorIntent.ToggleMute: IsMuted = !IsMuted; Status = IsMuted ? "Muted" : "Unmuted"; break;
 
@@ -1313,15 +1314,137 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     /// waits: the user pressed a key to get an answer.
     /// </para>
     /// <para>
-    /// A low-confidence result changes nothing. Silently jumping an overlay to the wrong
-    /// place is worse than saying so, because the user's next move is to check the alignment
-    /// by eye either way — and if it moved, they have lost where it was.
+    /// A low-confidence result changes nothing, but it does not merely say no. Silently
+    /// jumping an overlay to the wrong place is worse than refusing, because the user's next
+    /// move is to check the alignment by eye either way — and if it moved, they have lost
+    /// where it was. So the best offer travels with the refusal instead: the status line names
+    /// where it is and how strong it is, and <see cref="TakeNextAudioMatch"/> takes it. The
+    /// decision stays the user's, which it cannot be if they are never told what was found.
     /// </para>
     /// </remarks>
-    private void SyncOverlayAudio()
+    private void SyncOverlayAudio() => BeginSync(takeAnyway: false);
+
+    /// <summary>The offsets the last sync found, best first.</summary>
+    private IReadOnlyList<SyncMatch> _matches = [];
+
+    /// <summary>What those offsets were an answer to, so a stale field is not walked.</summary>
+    private SyncQuestion? _asked;
+
+    /// <summary>How far down the field the user has walked.</summary>
+    private int _taken;
+
+    /// <summary>Set while a take is rewriting the very clip its cached field describes.</summary>
+    private bool _takingMatch;
+
+    /// <summary>What a cached field of matches was an answer to.</summary>
+    /// <remarks>
+    /// A list of frame numbers means nothing against a different question, and the question can
+    /// change without the document changing — moving the playhead onto another clip is enough.
+    /// Neither half names where the thing currently <em>is</em>, because that is exactly what a
+    /// take moves: a committed clip is named by the span it occupies, which
+    /// <see cref="TimelineEdits.SetOverlaySourceStart"/> leaves alone, and a placement by the
+    /// content the user chose, which is fixed for as long as it is being aimed.
+    /// </remarks>
+    private readonly record struct SyncQuestion(bool Placing, int SourceId, long A, long B);
+
+    /// <summary>
+    /// Applies a match the correlation was not confident enough to apply by itself, and on a
+    /// second press the one after that.
+    /// </summary>
+    /// <remarks>
+    /// Runs a sync first when there is no field to walk, so this works as the first key the
+    /// user presses as well as the second. It wraps round at the end rather than stopping:
+    /// there are at most a handful of offsets, and a key that silently does nothing on its
+    /// fifth press is one you have to count.
+    /// </remarks>
+    private void TakeNextAudioMatch()
     {
-        if (Mode == EditorMode.Overlay) SyncPendingOverlay();
-        else SyncCommittedOverlay();
+        if (_asked is { } asked && CurrentSyncQuestion() is { } now && asked == now
+            && _matches.Count > 0)
+        {
+            TakeMatch(_taken + 1);
+            return;
+        }
+
+        BeginSync(takeAnyway: true);
+    }
+
+    private void BeginSync(bool takeAnyway)
+    {
+        if (Mode == EditorMode.Overlay) SyncPendingOverlay(takeAnyway);
+        else SyncCommittedOverlay(takeAnyway);
+    }
+
+    /// <summary>What a sync would be asking right now, or null when it would ask nothing.</summary>
+    private SyncQuestion? CurrentSyncQuestion()
+    {
+        if (Mode == EditorMode.Overlay)
+            return _pendingContent is { } content
+                ? new SyncQuestion(
+                    true, content.SourceId, content.SourceStartFrame, content.LengthFrames)
+                : null;
+
+        if (Mode != EditorMode.Normal || IndexOfOverlayAt(Playhead) is not { } index) return null;
+
+        var clip = Project.Overlays[index];
+
+        return new SyncQuestion(false, clip.SourceId, clip.Range.Start, clip.Range.End);
+    }
+
+    /// <summary>Applies the nth offset the last sync found, wrapping round at the end.</summary>
+    private void TakeMatch(int n)
+    {
+        if (_asked is not { } question || _matches.Count == 0)
+        {
+            Status = "Nothing to take — press A to look for a match first.";
+            return;
+        }
+
+        _taken = ((n % _matches.Count) + _matches.Count) % _matches.Count;
+
+        var match = _matches[_taken];
+        var more = _matches.Count > 1
+            ? $" ({_taken + 1} of {_matches.Count} — Shift+A for the next)"
+            : "";
+
+        if (question.Placing)
+        {
+            Playhead = match.Frame;
+            Status = $"Took the match at {Format(PendingRange.Start)}, "
+                + $"confidence {match.Confidence:0.00}{more}";
+            return;
+        }
+
+        if (IndexOfOverlayAt(Playhead) is not { } index)
+        {
+            Status = "No overlay under the playhead to sync.";
+            return;
+        }
+
+        var target = match.Frame;
+
+        _takingMatch = true;
+        try { Apply("Sync overlay", p => TimelineEdits.SetOverlaySourceStart(p, index, target)); }
+        finally { _takingMatch = false; }
+
+        Status = $"Took the match, reading from {Format(target)} of its source, "
+            + $"confidence {match.Confidence:0.00}{more}";
+    }
+
+    /// <summary>Drops a field of matches that no longer describes anything.</summary>
+    private void ForgetMatches()
+    {
+        _matches = [];
+        _asked = null;
+        _taken = 0;
+    }
+
+    /// <summary>Remembers what a finished sync found, so <c>Shift+A</c> can walk it.</summary>
+    private void Remember(IReadOnlyList<SyncMatch> matches)
+    {
+        _matches = matches;
+        _asked = CurrentSyncQuestion();
+        _taken = 0;
     }
 
     /// <summary>
@@ -1345,7 +1468,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     };
 
     /// <summary>Moves the clip being placed to where its sound fits the base track.</summary>
-    private void SyncPendingOverlay()
+    private void SyncPendingOverlay(bool takeAnyway)
     {
         if (_pendingContent is not { } content) return;
 
@@ -1374,14 +1497,14 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
                 from, id => indices[id], PeaksFor);
         })
         .ContinueWith(
-            task => ApplyPendingSync(task, from),
+            task => ApplyPendingSync(task, from, takeAnyway),
             CancellationToken.None,
             TaskContinuationOptions.None,
             TaskScheduler.FromCurrentSynchronizationContext());
     }
 
     /// <summary>Slides a placed clip's content until it matches the base track under it.</summary>
-    private void SyncCommittedOverlay()
+    private void SyncCommittedOverlay(bool takeAnyway)
     {
         if (IndexOfOverlayAt(Playhead) is not { } index)
         {
@@ -1421,7 +1544,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
                 PeaksFor);
         })
         .ContinueWith(
-            task => ApplySync(task, index, current),
+            task => ApplySync(task, index, current, takeAnyway),
             CancellationToken.None,
             TaskContinuationOptions.None,
             TaskScheduler.FromCurrentSynchronizationContext());
@@ -1434,21 +1557,25 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     /// Taking the playhead along also leaves the user looking at the frame the match was made
     /// against, which is the one they want to check.
     /// </remarks>
-    private void ApplyPendingSync(Task<TimelineSyncOutcome> task, long from)
+    private void ApplyPendingSync(Task<TimelineSyncOutcome> task, long from, bool takeAnyway)
     {
         IsBusy = false;
 
         if (task.IsFaulted)
         {
+            ForgetMatches();
             Status = $"Could not match the audio: {task.Exception?.GetBaseException().Message}";
             return;
         }
 
         var outcome = task.Result;
+        Remember(outcome.Matches);
 
         if (!outcome.Succeeded)
         {
-            Status = Describe(outcome.Failure, placing: true);
+            if (takeAnyway && _matches.Count > 0) TakeMatch(0);
+            else Status = Describe(outcome.Failure, placing: true, outcome.Matches);
+
             return;
         }
 
@@ -1460,33 +1587,41 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         Status = Summarise(moved, outcome.Confidence, outcome.Runner);
     }
 
-    private void ApplySync(Task<SyncOutcome> task, int index, long current)
+    private void ApplySync(Task<SyncOutcome> task, int index, long current, bool takeAnyway)
     {
         IsBusy = false;
 
         if (task.IsFaulted)
         {
+            ForgetMatches();
             Status = $"Could not match the audio: {task.Exception?.GetBaseException().Message}";
             return;
         }
 
         var outcome = task.Result;
+        Remember(outcome.Matches);
 
         if (!outcome.Succeeded)
         {
-            Status = Describe(outcome.Failure, placing: false);
+            if (takeAnyway && _matches.Count > 0) TakeMatch(0);
+            else Status = Describe(outcome.Failure, placing: false, outcome.Matches);
+
             return;
         }
 
         var target = outcome.SourceStartFrame;
         var at = index;
-        Apply("Sync overlay", p => TimelineEdits.SetOverlaySourceStart(p, at, target));
+
+        _takingMatch = true;
+        try { Apply("Sync overlay", p => TimelineEdits.SetOverlaySourceStart(p, at, target)); }
+        finally { _takingMatch = false; }
 
         Status = Summarise(target - current, outcome.Confidence, outcome.Runner);
     }
 
     /// <summary>Why a sync produced nothing, in the words of whichever half asked.</summary>
-    private static string Describe(SyncFailure failure, bool placing) => failure switch
+    private string Describe(
+        SyncFailure failure, bool placing, IReadOnlyList<SyncMatch> matches) => failure switch
     {
         SyncFailure.NoAudio => "Sync needs sound: one of these clips has no audio track.",
         SyncFailure.NotAnalysed => "Still analysing the audio — try again in a moment.",
@@ -1496,10 +1631,31 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         SyncFailure.MatchNotOnTimeline =>
             "Found the matching sound, but that part of the base track was cut out — "
             + "there is nowhere on the timeline to put it.",
-        _ => placing
-            ? "No confident audio match — move the playhead to place it by eye."
-            : "No confident audio match — drag the clip's edges on the strip to sync by hand.",
+        _ => NoConfidentMatch(placing, matches),
     };
+
+    /// <summary>What to say when nothing was strong enough to move a clip on its own.</summary>
+    /// <remarks>
+    /// The best guess goes in the message whenever there is one. A refusal the user cannot
+    /// argue with reads as a feature that does not work, even when it is only being careful —
+    /// and the confidence is the one thing that says whether it was close, which decides
+    /// whether the next move is to take it or to place the clip by eye.
+    /// </remarks>
+    private string NoConfidentMatch(bool placing, IReadOnlyList<SyncMatch> matches)
+    {
+        if (matches.Count == 0)
+            return placing
+                ? "No audio match at all — move the playhead to place it by eye."
+                : "No audio match at all — drag the clip's edges on the strip to sync by hand.";
+
+        var best = matches[0];
+        var where = placing
+            ? $"at {Format(best.Frame)}"
+            : $"reading from {Format(best.Frame)} of its source";
+
+        return $"Not confident enough to move it — best match {where}, "
+            + $"confidence {best.Confidence:0.00}. Shift+A takes it anyway.";
+    }
 
     /// <summary>How far it moved, and how much the answer is to be trusted.</summary>
     /// <remarks>
@@ -2281,6 +2437,11 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         // keep their own index in step with what they are rewriting.
         if (!_draggingOverlay) SelectedOverlay = null;
         if (!_draggingSegment) SelectedSegment = null;
+
+        // A field of matches is frame numbers too, and just as free to be renumbered. The one
+        // caller that knows better is a take, which is rewriting the very clip its own list
+        // describes and leaves every frame in that list still meaning what it meant.
+        if (!_takingMatch) ForgetMatches();
 
         if (_playhead >= project.DurationFrames)
             _playhead = Math.Max(0, project.DurationFrames - 1);

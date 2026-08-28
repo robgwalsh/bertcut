@@ -147,6 +147,19 @@ public enum EditorIntent
     /// </summary>
     SyncOverlayAudio,
 
+    /// <summary>
+    /// Take the best alignment the correlation found, then the next one, whether or not it was
+    /// confident enough to apply on its own.
+    /// </summary>
+    /// <remarks>
+    /// The escape hatch for <see cref="SyncOverlayAudio"/>. A sync that refuses is being
+    /// honest — a clip silently jumped to the wrong place is worse than one that did not move —
+    /// but a refusal the user cannot argue with is indistinguishable from a feature that does
+    /// not work. This says "I can see it, take it", and pressing it again walks down the rest
+    /// of what was found, which is the answer when the best guess was the wrong one.
+    /// </remarks>
+    TakeNextAudioMatch,
+
     Undo, Redo,
     OpenFile, ImportSource, Export,
 
@@ -227,6 +240,7 @@ public static class KeyMap
         // takes a marked range out of the timeline rather than a clip you have pointed at.
         new(EditorKey.Delete, EditorModifiers.None, EditorMode.Normal, EditorIntent.DeleteSelection, "Remove what is selected on the timeline"),
         new(EditorKey.A, EditorModifiers.None, EditorMode.Normal, EditorIntent.SyncOverlayAudio, "Sync the overlay to the base track by its sound"),
+        new(EditorKey.A, EditorModifiers.Shift, EditorMode.Normal, EditorIntent.TakeNextAudioMatch, "Take the best sound match anyway, then the next one"),
         new(EditorKey.M, EditorModifiers.None, EditorMode.Normal, EditorIntent.ToggleMute, "Mute / unmute the preview"),
 
         // Crop and overlay placement share their editing keys, so the gesture for putting
@@ -255,6 +269,7 @@ public static class KeyMap
         new(EditorKey.Home, EditorModifiers.None, EditorMode.Overlay, EditorIntent.GoToStart, "Move it to the start"),
         new(EditorKey.End, EditorModifiers.None, EditorMode.Overlay, EditorIntent.GoToEnd, "Move it to the end"),
         new(EditorKey.A, EditorModifiers.None, EditorMode.Overlay, EditorIntent.SyncOverlayAudio, "Put it where the sound matches"),
+        new(EditorKey.A, EditorModifiers.Shift, EditorMode.Overlay, EditorIntent.TakeNextAudioMatch, "Take the best sound match anyway, then the next one"),
 
         // Document and view
         new(EditorKey.Z, EditorModifiers.Control, EditorMode.Normal, EditorIntent.Undo, "Undo"),
@@ -335,6 +350,7 @@ public static class KeyMap
                 or EditorIntent.BeginCrop or EditorIntent.ClearCropAtPlayhead
                 or EditorIntent.BeginOverlay or EditorIntent.RemoveOverlayAtPlayhead
                 or EditorIntent.DeleteSelection or EditorIntent.SyncOverlayAudio
+                or EditorIntent.TakeNextAudioMatch
                 or EditorIntent.ToggleOverlayMute => "Edit",
 
             _ => "File and view",

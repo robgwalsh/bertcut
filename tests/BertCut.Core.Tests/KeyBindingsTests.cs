@@ -115,6 +115,33 @@ public class KeyBindingsTests
     }
 
     /// <remarks>
+    /// Taking a match anyway shadows the sync key in both the modes the sync key works in, and
+    /// in neither of the ones it does not — the escape hatch has to be reachable from wherever
+    /// the refusal it answers can be produced, and nowhere else.
+    /// </remarks>
+    [Fact]
+    public void Taking_a_match_anyway_is_reachable_wherever_the_sync_key_is()
+    {
+        Assert.Equal(
+            EditorIntent.TakeNextAudioMatch,
+            KeyMap.Resolve(EditorKey.A, EditorModifiers.Shift, EditorMode.Normal));
+
+        Assert.Equal(
+            EditorIntent.TakeNextAudioMatch,
+            KeyMap.Resolve(EditorKey.A, EditorModifiers.Shift, EditorMode.Overlay));
+
+        Assert.Equal(
+            EditorIntent.None,
+            KeyMap.Resolve(EditorKey.A, EditorModifiers.Shift, EditorMode.Crop));
+
+        // Ctrl+A is still appending a video to the end of the timeline; the modifier is the
+        // whole difference between the three things A does.
+        Assert.Equal(
+            EditorIntent.AppendSource,
+            KeyMap.Resolve(EditorKey.A, EditorModifiers.Control, EditorMode.Normal));
+    }
+
+    /// <remarks>
     /// M used to mute an overlay, which never affected anything. It now mutes the preview,
     /// and the old intent is left unbound rather than removed.
     /// </remarks>

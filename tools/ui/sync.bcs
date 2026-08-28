@@ -87,3 +87,68 @@ tick
 stop
 assert-frame-between 5 40
 state
+
+# ---- two cameras: separate files, separate rooms ----------------------------------------
+#
+# The other shape, and the one the confidence gate used to refuse. Two recordings of one event
+# rather than one recording holding two takes, so nothing is excluded and every offset in the
+# candidate is admissible — and the two microphones agree about how loud the event was from
+# moment to moment while disagreeing about the waveform underneath it. Judging that on
+# near-waveform detail is what used to answer "no confident audio match" on footage the coarse
+# pass had already identified outright.
+#
+# The far camera started rolling four seconds later and stopped with the near one, so it is
+# four seconds shorter and its own frame 0 belongs at base frame 120.
+reset
+sample-cameras near.mp4 far.mp4 12
+open near.mp4
+import far.mp4
+assert-has-media
+settle 1500
+
+# Overlay the whole of the far camera's recording. Its content is fixed by that choice, so
+# what a sync moves here is the clip, along the timeline.
+key P
+overlay-source file far.mp4
+assert-mode Overlay
+
+# Aim it somewhere plainly wrong, so landing in the right place cannot be luck.
+goto 20
+assert-overlay-start 20
+shot 05-cameras-aimed-wrong
+
+key A
+assert-status Synced
+assert-overlay-start 118 122
+shot 06-cameras-synced
+
+# Idempotent here too: the tie-break toward staying put is what stops a second press walking
+# the clip to somewhere that matches nearly as well.
+key A
+assert-overlay-start 118 122
+
+# Shift+A is the escape hatch. With a match already applied it steps on to the next offer
+# rather than repeating this one, which is the answer when the best guess was the wrong one.
+key Shift+A
+assert-status match
+state
+
+# ---- and when it genuinely cannot tell ---------------------------------------------------
+#
+# Unrelated sound, so there is nothing to find. The refusal names its best guess and its
+# confidence rather than saying only that it failed: a flat no reads as a broken feature, and
+# the number is the one thing that says whether it was close enough to be worth taking.
+reset
+sample-cameras near.mp4 far.mp4 12
+sample other.mp4 8
+open near.mp4
+import other.mp4
+settle 1500
+
+key P
+overlay-source file other.mp4
+assert-mode Overlay
+goto 30
+key A
+assert-status confident
+state

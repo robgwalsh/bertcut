@@ -27,6 +27,12 @@ public class OverlaySyncTests : IDisposable
     private const int SampleRate = 48000;
     private const int AngleSeconds = 6;
 
+    /// <summary>How long each of the two cameras rolls for.</summary>
+    private const int CameraSeconds = 12;
+
+    /// <summary>How much later the second camera started recording.</summary>
+    private const int CameraOffsetSeconds = 4;
+
     private readonly FfmpegRuntime? _runtime;
     private readonly string _dir;
     private readonly string? _previousStateDir;
@@ -233,6 +239,131 @@ public class OverlaySyncTests : IDisposable
         Assert.Equal(SyncFailure.MatchNotOnTimeline, outcome.Failure);
     }
 
+    /// <summary>
+    /// Two cameras of one event agree about loudness and disagree about waveform.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the measurement the two-pass split rests on, and it is here because it is easy
+    /// to build a fixture that hides it. The other fixture in this file makes its second angle
+    /// by scaling the first one's samples, so the two agree at every resolution and a
+    /// correlation run at 1 ms buckets sails through. A real second camera stands somewhere
+    /// else: it hears its own room, through its own microphone, riding its own automatic gain.
+    /// </para>
+    /// <para>
+    /// So the coarse pass over the 100 Hz envelopes still recognises the event, and correlating
+    /// near-waveform detail at 1 kHz scores far lower on the very same alignment. Gating on the
+    /// second number is what used to refuse footage the first number had already identified.
+    /// </para>
+    /// </remarks>
+    [SkippableFact]
+    public async Task Two_cameras_agree_on_loudness_far_better_than_on_waveform()
+    {
+        Skip.If(_runtime is null, "No FFmpeg 8+ build found.");
+
+        var (project, _) = await TwoCameraProjectAsync("loud-a.mp4", "loud-b.mp4");
+
+        var near = project.RequireSource(1);
+        var far = project.RequireSource(2);
+
+        var nearPeaks = AudioPeaksCache.GetOrBuild(near.Path, near.ContentKey, SampleRate)!;
+        var farPeaks = AudioPeaksCache.GetOrBuild(far.Path, far.ContentKey, SampleRate)!;
+
+        // The same five seconds of the event: six seconds into the near camera, and two into
+        // the far one, which started rolling four seconds later.
+        const double referenceStart = 6;
+        const double referenceLength = 5;
+        const double answer = referenceStart - CameraOffsetSeconds;
+
+        var coarse = AudioSync.FindOffsets(
+            new SyncRequest(nearPeaks, referenceStart, referenceLength, farPeaks));
+
+        Assert.NotEmpty(coarse);
+        Assert.InRange(coarse[0].OffsetSeconds, answer - 0.05, answer + 0.05);
+
+        var fine = ConfidenceAt(near.Path, far.Path, referenceStart, 4, answer, rate: 1000);
+
+        Assert.True(coarse[0].Confidence > OverlaySync.MinimumConfidence,
+            $"the loudness shape survives a second microphone, but scored {coarse[0].Confidence:0.000}");
+
+        Assert.True(fine < coarse[0].Confidence - 0.1,
+            $"waveform detail should be much the weaker signal, but coarse scored "
+            + $"{coarse[0].Confidence:0.000} and fine {fine:0.000}");
+    }
+
+    /// <summary>
+    /// A clip from a second camera lands on the base track, which is the case this whole
+    /// feature exists for and the one nothing in this file used to cover.
+    /// </summary>
+    /// <remarks>
+    /// Two files, so <c>sameFile</c> is false, nothing is excluded and every offset in the
+    /// candidate is admissible — a different path through <see cref="OverlaySync"/> from the
+    /// one-recording-two-angles tests above.
+    /// </remarks>
+    [SkippableFact]
+    public async Task An_overlay_from_a_second_camera_snaps_onto_the_base()
+    {
+        Skip.If(_runtime is null, "No FFmpeg 8+ build found.");
+
+        var (project, indices) = await TwoCameraProjectAsync("cam-a.mp4", "cam-b.mp4");
+
+        // Five seconds of the programme starting six seconds in. The far camera started four
+        // seconds later, so the same moment is two seconds into its own recording.
+        var range = new FrameRange(6 * Fps, 11 * Fps);
+        const long expected = (6 - CameraOffsetSeconds) * Fps;
+
+        var outcome = OverlaySync.Solve(
+            project, range, overlaySourceId: 2, currentSourceStartFrame: 0,
+            indexOf: id => indices[id], peaksOf: PeaksOf(project));
+
+        Assert.True(outcome.Succeeded, $"sync failed: {outcome.Failure}");
+        Assert.InRange(outcome.SourceStartFrame, expected - 1, expected + 1);
+    }
+
+    /// <summary>
+    /// The field of offers leads with the one that was applied, and the rest are behind it.
+    /// </summary>
+    /// <remarks>
+    /// This is the contract the "take it anyway" key rests on. The solver ranks what it found
+    /// and hands the whole field back, so a caller can apply the best of it without asking
+    /// again and can walk past it when the best was the wrong one — including on the refusals,
+    /// where the field is the only thing standing between the user and a flat no.
+    /// </remarks>
+    [SkippableFact]
+    public async Task The_offers_lead_with_the_one_that_was_applied()
+    {
+        Skip.If(_runtime is null, "No FFmpeg 8+ build found.");
+
+        var (project, indices) = await TwoCameraProjectAsync("offers-a.mp4", "offers-b.mp4");
+
+        var outcome = OverlaySync.Solve(
+            project, new FrameRange(6 * Fps, 11 * Fps), overlaySourceId: 2,
+            currentSourceStartFrame: 0, indexOf: id => indices[id], peaksOf: PeaksOf(project));
+
+        Assert.True(outcome.Succeeded, $"sync failed: {outcome.Failure}");
+        Assert.NotEmpty(outcome.Matches);
+        Assert.Equal(outcome.SourceStartFrame, outcome.Matches[0].Frame);
+        Assert.Equal(outcome.Confidence, outcome.Matches[0].Confidence);
+
+        // Ranked, so walking down the field only ever gives up confidence.
+        for (var i = 1; i < outcome.Matches.Count; i++)
+            Assert.True(outcome.Matches[i].Confidence <= outcome.Matches[i - 1].Confidence,
+                $"offer {i} scored {outcome.Matches[i].Confidence:0.000}, above the one before it");
+    }
+
+    /// <summary>A default outcome answers an empty field rather than a null one.</summary>
+    /// <remarks>
+    /// <c>Matches</c> is backed by a nullable field precisely so that <c>default</c> — which a
+    /// struct can always be made — does not hand a caller a null list to walk.
+    /// </remarks>
+    [Fact]
+    public void A_refusal_carrying_nothing_still_answers_an_empty_field()
+    {
+        Assert.Empty(default(SyncOutcome).Matches);
+        Assert.Empty(default(TimelineSyncOutcome).Matches);
+        Assert.Empty(SyncOutcome.Failed(SyncFailure.NoAudio).Matches);
+        Assert.Empty(TimelineSyncOutcome.Failed(SyncFailure.NoAudio).Matches);
+    }
     // ---- fixtures -----------------------------------------------------------------
 
     private Func<int, AudioPeaks?> PeaksOf(Project project) => id =>
@@ -369,6 +500,220 @@ public class OverlaySyncTests : IDisposable
         double total = 0;
         for (var i = 0; i < count; i++) total += Math.Abs(buffer[i]);
         return count == 0 ? 0 : total / count;
+    }
+
+    /// <summary>Builds a project over two cameras' recordings of one event.</summary>
+    /// <remarks>
+    /// The near camera is the base track; the far one is imported as a source to overlay from
+    /// rather than as another stretch of the programme, which is what <c>appendToBase: false</c>
+    /// says.
+    /// </remarks>
+    private async Task<(Project Project, Dictionary<int, Core.Media.SourceIndex> Indices)>
+        TwoCameraProjectAsync(string nameA, string nameB)
+    {
+        var (pathA, pathB) = MakeTwoCameraClips(nameA, nameB);
+
+        var prober = new MediaProber(_runtime!);
+        var a = await prober.ProbeAsync(pathA);
+        var b = await prober.ProbeAsync(pathB);
+
+        Assert.True(a.Media.HasAudio && b.Media.HasAudio, "both fixtures should have audio");
+
+        var project = TimelineEdits.ImportSource(
+            Project.Empty(new OutputFormat(320, 240, Rational.FromInt(Fps), SampleRate)), a.Media);
+
+        project = TimelineEdits.ImportSource(project, b.Media, appendToBase: false);
+
+        return (project, new Dictionary<int, Core.Media.SourceIndex> { [1] = a.Index, [2] = b.Index });
+    }
+
+    /// <summary>
+    /// One event, recorded by two cameras standing in different places and started
+    /// <see cref="CameraOffsetSeconds"/> apart.
+    /// </summary>
+    private (string Near, string Far) MakeTwoCameraClips(string nameA, string nameB)
+    {
+        var world = WorldEvent();
+
+        var wavA = Path.Combine(_dir, Path.GetFileNameWithoutExtension(nameA) + ".wav");
+        var wavB = Path.Combine(_dir, Path.GetFileNameWithoutExtension(nameB) + ".wav");
+
+        WriteWav(wavA, NearCamera(world));
+        WriteWav(wavB, FarCamera(world, CameraOffsetSeconds * SampleRate));
+
+        // The far camera is also recording at a lower audio quality, which is ordinary and
+        // which matters here: a perceptual codec is built to keep what the ear hears as
+        // loudness and to spend its bits nowhere else, so it preserves what the coarse pass
+        // measures and is free to rewrite what a 1 ms bucket measures.
+        return (
+            EncodeClip(nameA, wavA, CameraSeconds, "128k"),
+            EncodeClip(nameB, wavB, CameraSeconds, "40k"));
+    }
+
+    /// <summary>The sound in the room, before either camera hears it.</summary>
+    /// <remarks>
+    /// Broadband on purpose. A single tone passes through a room almost unchanged — every
+    /// reflection only shifts its phase — so two cameras would still see near enough the same
+    /// waveform and this fixture would prove nothing. A spread of inharmonic partials under a
+    /// wash of noise is what a room actually colours differently from two places, and that
+    /// difference is the whole point of the fixture.
+    /// </remarks>
+    private static double[] WorldEvent()
+    {
+        const int seconds = CameraSeconds + CameraOffsetSeconds;
+        var count = seconds * SampleRate;
+
+        var envelope = SmoothEnvelope(seed: 20260828, samples: count);
+        var random = new Random(1234);
+
+        var world = new double[count];
+        for (var i = 0; i < count; i++)
+        {
+            var t = i / (double)SampleRate;
+
+            var content =
+                (Math.Sin(2 * Math.PI * 190 * t) * 0.30) +
+                (Math.Sin(2 * Math.PI * 437 * t) * 0.28) +
+                (Math.Sin(2 * Math.PI * 921 * t) * 0.22) +
+                (Math.Sin(2 * Math.PI * 1613 * t) * 0.16) +
+                ((random.NextDouble() - 0.5) * 0.9);
+
+            world[i] = envelope[i] * content * 0.7;
+        }
+
+        return world;
+    }
+
+    /// <summary>The camera in the room: close, clean, one short reflection.</summary>
+    private static short[] NearCamera(double[] world)
+    {
+        const int reflection = SampleRate * 13 / 1000;
+
+        var hiss = new Random(77);
+        var result = new short[CameraSeconds * SampleRate];
+
+        for (var i = 0; i < result.Length; i++)
+        {
+            var wet = world[i] + (i >= reflection ? world[i - reflection] * 0.25 : 0);
+            result[i] = ToPcm((wet * 0.85) + ((hiss.NextDouble() - 0.5) * 0.008));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// The camera across the room: a longer reverb, a duller microphone, its own noise floor
+    /// and its own automatic gain.
+    /// </summary>
+    /// <remarks>
+    /// Every one of those is something a normalised correlation cannot simply divide out. The
+    /// reverb and the low-pass rewrite the waveform inside a bucket, which is what a fine pass
+    /// compares; the automatic gain rides the level up and down over seconds, which is what a
+    /// long window compares. Only the shape of the loudness in between survives both.
+    /// </remarks>
+    private static short[] FarCamera(double[] world, int start)
+    {
+        // A room, as a handful of reflections. The early cluster is what matters: arriving
+        // within a few milliseconds of the direct sound, it rewrites the waveform inside a
+        // 1 ms bucket while leaving the loudness over 10 ms very nearly alone. That gap is
+        // the whole difference between the two passes, and it is what a second camera
+        // standing across a room really does to a sound.
+        var room = new (int Delay, double Gain)[]
+        {
+            (SampleRate * 3 / 1000, 0.55),
+            (SampleRate * 5 / 1000, 0.48),
+            (SampleRate * 8 / 1000, 0.40),
+            (SampleRate * 11 / 1000, 0.34),
+            (SampleRate * 31 / 1000, 0.26),
+            (SampleRate * 57 / 1000, 0.18),
+        };
+
+        var hiss = new Random(99);
+        var result = new short[CameraSeconds * SampleRate];
+        var gain = SlowGain(seed: 5150, samples: result.Length);
+        var low = 0.0;
+
+        for (var i = 0; i < result.Length; i++)
+        {
+            var n = start + i;
+
+            var wet = world[n];
+            foreach (var (delay, level) in room)
+                if (n >= delay) wet += world[n - delay] * level;
+
+            // One pole, about 600 Hz — a duller microphone than the one in the room.
+            low += 0.08 * (wet - low);
+
+            result[i] = ToPcm((low * 0.42 * gain[i]) + ((hiss.NextDouble() - 0.5) * 0.06));
+        }
+
+        return result;
+    }
+
+    /// <summary>A camera's automatic gain: a level that wanders over seconds, not over frames.</summary>
+    private static double[] SlowGain(int seed, int samples)
+    {
+        const int perPoint = SampleRate * 3 / 2;
+
+        var random = new Random(seed);
+        var points = new double[(samples / perPoint) + 2];
+        for (var i = 0; i < points.Length; i++) points[i] = 0.65 + (random.NextDouble() * 0.7);
+
+        var gain = new double[samples];
+        for (var i = 0; i < samples; i++)
+        {
+            var index = i / perPoint;
+            var t = (i % perPoint) / (double)perPoint;
+            gain[i] = points[index] + ((points[index + 1] - points[index]) * t);
+        }
+
+        return gain;
+    }
+
+    /// <summary>
+    /// Correlates decoded audio at one resolution, around an alignment already known to be
+    /// right — so what it returns is how well that resolution can see a match, not whether
+    /// there is one.
+    /// </summary>
+    private static double ConfidenceAt(
+        string referencePath,
+        string candidatePath,
+        double referenceStart,
+        double length,
+        double answer,
+        int rate)
+    {
+        using var reference = new AudioDecoder(referencePath, SampleRate);
+        using var candidate = new AudioDecoder(candidatePath, SampleRate);
+
+        var pattern = AudioPeaksBuilder.BuildRange(reference, referenceStart, length, rate);
+
+        var searchStart = Math.Max(0, answer - 0.5);
+        var signal = AudioPeaksBuilder.BuildRange(candidate, searchStart, length + 1, rate);
+
+        var found = AudioSync.FindOffsets(new SyncRequest(pattern, 0, length, signal), take: 1);
+
+        return found.Count == 0 ? 0 : found[0].Confidence;
+    }
+
+    /// <summary>Muxes one of the fixture's WAVs under a test pattern.</summary>
+    private string EncodeClip(string name, string wav, int seconds, string audioBitrate)
+    {
+        var path = Path.Combine(_dir, name);
+
+        Run(_runtime!.FfmpegPath,
+        [
+            "-hide_banner", "-y", "-nostdin",
+            "-f", "lavfi", "-i", $"testsrc2=size=320x240:rate={Fps}:duration={seconds}",
+            "-i", wav,
+            "-c:v", "libopenh264", "-b:v", "1M", "-g", "30", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", audioBitrate,
+            "-fps_mode", "cfr", "-r", Fps.ToString(),
+            "-shortest",
+            path,
+        ]);
+
+        return path;
     }
 
     private static void Run(string exe, string[] args)

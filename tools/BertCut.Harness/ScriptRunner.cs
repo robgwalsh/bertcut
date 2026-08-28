@@ -87,6 +87,7 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
 
             case "sample": Sample(rest); break;
             case "sample-angles": SampleAngles(rest); break;
+            case "sample-cameras": SampleCameras(rest); break;
             case "open": Open(rest); break;
             case "import": Load(rest, path => session.Model.ImportAsync(path)); break;
             case "append": Load(rest, path => session.Model.AppendAsync(path)); break;
@@ -172,6 +173,29 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
         var seconds = tail.Length == 0 ? 6 : Number(tail, "sample-angles");
 
         SampleMedia.WriteTwoAngles(session.Runtime, Resolve(path), seconds);
+    }
+
+    /// <summary>
+    /// The two-camera fixture: one event in two separate files, heard through two different
+    /// rooms and two different microphones.
+    /// </summary>
+    /// <remarks>
+    /// Two file names rather than one, because that is the point — a second camera is a second
+    /// recording, so nothing is excluded and every offset in it is admissible. The far camera
+    /// starts four seconds later than the near one and stops with it, so it is four seconds
+    /// shorter and its frame <c>n</c> is the base's frame <c>n + 120</c> at 30 fps.
+    /// </remarks>
+    private void SampleCameras(string rest)
+    {
+        var (near, afterNear) = Split(rest);
+        var (far, tail) = Split(afterNear);
+
+        if (near.Length == 0 || far.Length == 0)
+            throw new FormatException("sample-cameras needs two file names.");
+
+        var seconds = tail.Length == 0 ? 12 : Number(tail, "sample-cameras");
+
+        SampleMedia.WriteTwoCameras(session.Runtime, Resolve(near), Resolve(far), seconds);
     }
 
     private void Open(string rest)

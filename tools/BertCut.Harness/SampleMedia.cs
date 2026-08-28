@@ -72,6 +72,105 @@ internal static class SampleMedia
     }
 
     /// <summary>
+    /// Two clips of one event, filmed by two cameras standing in different places and started
+    /// <paramref name="apartSeconds"/> apart.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The other shape the sync has to handle, and the harder one. <see cref="WriteTwoAngles"/>
+    /// makes its second angle by scaling the first one's samples, so the two agree at every
+    /// resolution — which is realistic for one recording holding two takes, and not at all
+    /// realistic for two cameras. These hear the same event through different rooms and
+    /// different microphones, so they agree about how loud it was from moment to moment and
+    /// disagree about the waveform underneath, which is the case that used to be refused.
+    /// </para>
+    /// <para>
+    /// They are separate files, so the identity exclusion is not in play: nothing is excluded
+    /// and every offset in the candidate is admissible.
+    /// </para>
+    /// <para>
+    /// The far camera starts <paramref name="apartSeconds"/> late and stops with the near one,
+    /// so it is that much shorter — which also leaves it short enough to be aimed at a wrong
+    /// place on the timeline before a sync is asked to find the right one.
+    /// </para>
+    /// </remarks>
+    public static void WriteTwoCameras(
+        FfmpegRuntime runtime, string near, string far, int seconds, int apartSeconds = 4)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(seconds, apartSeconds);
+
+        var world = Event(seconds, seed: 11);
+        var farSeconds = seconds - apartSeconds;
+
+        var wavNear = Path.ChangeExtension(near, ".wav");
+        var wavFar = Path.ChangeExtension(far, ".wav");
+
+        WriteWav(wavNear, Heard(
+            world, 0, seconds, Near, smoothing: 0.5, gain: 0.85, hiss: 0.008, seed: 21));
+
+        WriteWav(wavFar, Heard(
+            world, apartSeconds * SampleRate, farSeconds, Far,
+            smoothing: 0.08, gain: 0.45, hiss: 0.05, seed: 22));
+
+        Encode(runtime, near, wavNear, seconds);
+        Encode(runtime, far, wavFar, farSeconds);
+    }
+
+    /// <summary>The room the near camera is standing in: close, with one early reflection.</summary>
+    private static readonly (int Delay, double Gain)[] Near =
+    [
+        (SampleRate * 13 / 1000, 0.25),
+    ];
+
+    /// <summary>
+    /// The room the far camera is standing in, as a handful of reflections.
+    /// </summary>
+    /// <remarks>
+    /// The early cluster is the part that matters. Arriving within a few milliseconds of the
+    /// direct sound, it rewrites the waveform inside a one-millisecond bucket while leaving the
+    /// loudness over ten milliseconds very nearly alone — which is the whole difference between
+    /// what the coarse pass of a sync measures and what the fine pass does.
+    /// </remarks>
+    private static readonly (int Delay, double Gain)[] Far =
+    [
+        (SampleRate * 3 / 1000, 0.55),
+        (SampleRate * 5 / 1000, 0.48),
+        (SampleRate * 8 / 1000, 0.40),
+        (SampleRate * 11 / 1000, 0.34),
+        (SampleRate * 31 / 1000, 0.26),
+        (SampleRate * 57 / 1000, 0.18),
+    ];
+
+    /// <summary>What one camera made of the sound in the room.</summary>
+    /// <param name="smoothing">
+    /// A one-pole low-pass coefficient, so the two microphones do not share a frequency
+    /// response either. The far one is duller, which is what standing further away sounds like.
+    /// </param>
+    private static short[] Heard(
+        short[] world, int start, int seconds, (int Delay, double Gain)[] room,
+        double smoothing, double gain, double hiss, int seed)
+    {
+        var noise = new Random(seed);
+        var result = new short[seconds * SampleRate];
+        var low = 0.0;
+
+        for (var i = 0; i < result.Length; i++)
+        {
+            var n = start + i;
+
+            var wet = world[n] / (double)short.MaxValue;
+            foreach (var (delay, level) in room)
+                if (n >= delay) wet += world[n - delay] / (double)short.MaxValue * level;
+
+            low += smoothing * (wet - low);
+
+            result[i] = Pcm((low * gain) + ((noise.NextDouble() - 0.5) * hiss * 2));
+        }
+
+        return result;
+    }
+
+    /// <summary>
     /// A 440 Hz tone under a slowly varying, non-repeating loudness curve.
     /// </summary>
     /// <remarks>

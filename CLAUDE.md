@@ -45,6 +45,37 @@ Three things are worth knowing before touching any of it:
   be fixed in one direction and forgotten in the other. Only the second can fail with
   `MatchNotOnTimeline`, which means the sound was found on footage that has been cut away.
 
+- **The coarse pass judges; the fine pass only confirms.** A sync correlates the cached 100 Hz
+  envelopes over the whole of both recordings, then re-correlates decoded audio around the
+  answer at `FineRate`. Which of those two numbers the confidence gate reads is the whole
+  feature. It used to read the fine one, taken at 1000 Hz — 48 samples at 48 kHz, about one
+  cycle of a 1 kHz tone, at which point peak-to-peak has stopped being a level and become
+  waveform detail. Two microphones standing in different places disagree about waveform detail
+  however well they agree about the sound, which is the reason `AudioPeaks` correlates an
+  envelope at all — thrown away by measuring one that finely. Measured on the two-camera
+  fixture in `OverlaySyncTests`, one correct alignment scores 0.87 at 100 Hz, 0.83 at 250 Hz,
+  0.62 at 500 Hz and 0.59 at 1000 Hz; swept across 24 reference positions the old arrangement
+  refused 6 outright and scraped the 0.55 gate on the rest (0.556 to 0.680), while the coarse
+  pass saw all 24 at about 0.86 with a decisive runner-up. Same footage, different marked
+  range, worked or failed near enough at random. So `MinimumConfidence` is read against the
+  coarse score, `MinimumFineConfidence` is looser and asks only "does this survive a closer
+  look", and `FineRate` is 250 Hz — 4 ms, an eighth of a frame, and still a measure of
+  loudness. Resolution was never the scarce thing here; agreement was.
+- **Every offset the coarse pass proposed is looked at, and they all come back.**
+  `AudioSync.FindOffsets` returns a ranked field precisely so the best is not the only one
+  considered; `Correlate` used to check the first and discard the rest, so a true match ranked
+  second failed the whole operation while sitting unexamined in the list. The fine pass also
+  picks the most *varying* stretch of the reference rather than its first four seconds — a
+  twenty-second match confirmed against whatever sits at its front is confirmed against room
+  tone as often as not, and a flat window correlates with nothing at all.
+- **A refusal carries its best guess.** `SyncOutcome.Matches` is populated even on
+  `NoConfidentMatch`, the status line names where the best offer is and how strong, and
+  `Shift+A` (`TakeNextAudioMatch`) applies it — pressing again walks down the field and wraps.
+  A refusal the user cannot argue with is indistinguishable from a feature that does not work,
+  and the confidence is the only thing that says whether it was close. The view model caches
+  that field against a `SyncQuestion` naming what was asked, because the question changes when
+  the playhead moves onto another clip without the document changing at all.
+
 `AudioPeaksCache` keeps a 100 Hz min/max envelope per source under the state root's `cache`
 directory, keyed by content key exactly as the filmstrip is. It feeds both the waveform lane
 and the coarse correlation pass.
@@ -372,6 +403,11 @@ Each command echoes `OK <command>`; captures print `SHOT <absolute path>` on the
 ```
 sample <path> [seconds]     synthesise a testsrc2 clip (its frame number is printed in the
                             picture) over a tone with an aperiodic envelope
+sample-cameras <a> <b> [sec]  two clips of one event, through two rooms and two microphones.
+                            The far camera starts 4s late and stops with the near one, so it
+                            is that much shorter and its frame 0 is the base's frame 120. Two
+                            files, so nothing is excluded — the case `sample-angles` cannot
+                            make and the one the confidence gate used to refuse.
 sample-angles <path> [sec]  one clip holding the same event twice: an angle, then the same
                             event again quieter and noisier — the audio-sync fixture
 open|import|append <path>
