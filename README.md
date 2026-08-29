@@ -15,9 +15,6 @@ winget install RobWalsh.BertCut
 * **Or** grab the [latest installer](https://github.com/robgwalsh/bertcut/releases/latest/download/BertCut-win-Setup.exe) and run it. It installs per-user, with no admin prompt.
 * **Or** download the [latest portable build](https://github.com/robgwalsh/bertcut/releases/latest/download/BertCut-win-Portable.zip) if you'd rather not install anything.
 
-FFmpeg is inside the package — there is nothing else to install, and BertCut decodes and exports
-with exactly the build it was tested against. That is most of why the download is large.
-
 Once installed, BertCut keeps itself up to date from
 [GitHub Releases](https://github.com/robgwalsh/bertcut/releases): it checks on startup and applies
 the update when you close the app. Your sessions and key bindings live in `%USERPROFILE%\.bertcut`
@@ -25,16 +22,11 @@ and are untouched by an update.
 
 ### Unstable
 
-The latest code in `main`, rebuilt and published on every push. It gets the same test suite a
-release gets and none of the settling time.
+The latest build, which might not be in winget yet.
 
 * Grab the [unstable installer](https://github.com/robgwalsh/bertcut/releases/download/unstable/BertCut-unstable-Setup.exe), or the [unstable portable build](https://github.com/robgwalsh/bertcut/releases/download/unstable/BertCut-unstable-Portable.zip).
 
-It **replaces an installed copy** rather than sitting beside it, and from then on that copy updates
-along unstable instead of along releases. The title bar says which you are on — `BertCut 1.1.3-unstable.42`
-against `BertCut 1.1.2`. Your data is untouched either way, and running the
-[stable installer](https://github.com/robgwalsh/bertcut/releases/latest/download/BertCut-win-Setup.exe)
-over the top puts you back.
+The main release and unstable build overwrite each other. The title bar says which you are on. Your data is untouched by switching between them.
 
 ## Layout
 
