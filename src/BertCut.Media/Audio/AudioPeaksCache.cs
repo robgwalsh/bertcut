@@ -123,4 +123,56 @@ public static class AudioPeaksCache
 
         File.Move(temporary, path, overwrite: true);
     }
+
+    /// <summary>
+    /// Deletes the least recently used envelopes until the cache fits a byte budget.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Nothing else ever removes one. An envelope costs about 3 MB an hour of source and is
+    /// keyed by content key, so a machine that edits a lot of footage accumulates them
+    /// indefinitely — 512 MB is roughly 170 hours, which is far past the point where the
+    /// oldest is worth keeping and still small enough to be nobody's problem.
+    /// </para>
+    /// <para>
+    /// Ordered by last <i>access</i> rather than last write: an envelope is written once and
+    /// then only ever read, so write time says when the file was first seen and access time
+    /// says when it last mattered. Windows keeps access time by default; where it is stale the
+    /// ordering degrades to write time, which is the behaviour this replaced anyway.
+    /// </para>
+    /// <para>
+    /// It deletes the <c>peaks.bin</c> file and only then the directory that held it, and only
+    /// if that leaves it empty — the same rule <see cref="FilmstripCache.PurgeThumbnails"/>
+    /// follows, and for the same reason: the two caches share a directory per content key.
+    /// </para>
+    /// </remarks>
+    public static void Trim(long budgetBytes = 512L * 1024 * 1024)
+    {
+        if (!Directory.Exists(AppPaths.Cache)) return;
+
+        var files = new DirectoryInfo(AppPaths.Cache)
+            .EnumerateDirectories()
+            .Select(d => new FileInfo(Path.Combine(d.FullName, "peaks.bin")))
+            .Where(f => f.Exists)
+            .OrderByDescending(f => f.LastAccessTimeUtc)
+            .ToList();
+
+        long running = 0;
+
+        foreach (var file in files)
+        {
+            running += file.Length;
+            if (running <= budgetBytes) continue;
+
+            try
+            {
+                var directory = file.Directory;
+                file.Delete();
+
+                if (directory is not null && !directory.EnumerateFileSystemInfos().Any())
+                    directory.Delete();
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* in use */ }
+        }
+    }
 }

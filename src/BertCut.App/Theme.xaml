@@ -194,6 +194,21 @@
     <Geometry x:Key="Icon.ShuttleForward">M12.5 5 L21 12 L12.5 19 Z M3 5 L11.5 12 L3 19 Z</Geometry>
     <Geometry x:Key="Icon.GoToEnd">M22 5 H20 V19 H22 Z M11 5 L18.5 12 L11 19 Z M2 5 L9.5 12 L2 19 Z</Geometry>
 
+    <!--
+        Zoom, for the strip rather than the picture. A lens with a bar in it and a lens with a
+        cross; the ring is two circles under the even-odd fill rule these glyphs are drawn with,
+        and the sign is one closed figure rather than two crossed bars — two would overlap, and
+        an even number of figures is a hole, which would put a square gap in the middle of the
+        plus.
+
+        The third is not a lens. Fitting the whole timeline is not a smaller magnification of the
+        same gesture, it is the one that ends it, so it is drawn as two posts with the picture
+        pushed out between them.
+    -->
+    <Geometry x:Key="Icon.ZoomIn">M3 10 A7,7 0 1 0 17,10 A7,7 0 1 0 3,10 Z M5 10 A5,5 0 1 0 15,10 A5,5 0 1 0 5,10 Z M9.2 6.2 H10.8 V9.2 H13.8 V10.8 H10.8 V13.8 H9.2 V10.8 H6.2 V9.2 H9.2 Z M14.8 16.9 L16.9 14.8 L21.5 19.4 L19.4 21.5 Z</Geometry>
+    <Geometry x:Key="Icon.ZoomOut">M3 10 A7,7 0 1 0 17,10 A7,7 0 1 0 3,10 Z M5 10 A5,5 0 1 0 15,10 A5,5 0 1 0 5,10 Z M6.2 9.2 H13.8 V10.8 H6.2 Z M14.8 16.9 L16.9 14.8 L21.5 19.4 L19.4 21.5 Z</Geometry>
+    <Geometry x:Key="Icon.ZoomToFit">M2 4 H4.5 V20 H2 Z M19.5 4 H22 V20 H19.5 Z M11 8 L6 12 L11 16 Z M13 8 L18 12 L13 16 Z M11.25 11.25 H12.75 V12.75 H11.25 Z</Geometry>
+
     <!-- The same icons at prose size, for the cards the app prints prose on. Scaled by
          layout transform rather than redrawn, so a card cannot show an icon the toolbar
          doesn’t. -->
@@ -562,6 +577,60 @@
                                           Opacity="0" Focusable="False" IsTabStop="False" />
                         </Track.DecreaseRepeatButton>
                     </Track>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!--
+        The one under the timeline strip: the same thumb lying down, in a track that is drawn
+        rather than transparent.
+
+        A visible groove, unlike the one above, because this scrollbar is read as much as it is
+        used: the thumb's width is how much of the recording the strip is showing and its
+        position is where in the recording that is — the two facts zoom takes away, and which
+        the status line names only in passing, the moment they change. Without something behind
+        it there is nothing for the thumb's width to be a fraction of.
+
+        Ten pixels rather than the eight above, because this one is aimed at with a pointer as a
+        matter of course and the other is mostly read.
+    -->
+    <Style x:Key="StripScrollBar" TargetType="ScrollBar">
+        <Setter Property="Height" Value="10" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ScrollBar">
+                    <Border Background="#171C23" CornerRadius="5" Padding="1">
+                        <Track x:Name="PART_Track" Orientation="Horizontal"
+                               IsDirectionReversed="False" Focusable="False">
+                            <Track.Thumb>
+                                <Thumb Focusable="False">
+                                    <Thumb.Template>
+                                        <ControlTemplate TargetType="Thumb">
+                                            <Border x:Name="Bar" CornerRadius="4" Background="#3A4453" />
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="Bar" Property="Background" Value="#4C5A6D" />
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Thumb.Template>
+                                </Thumb>
+                            </Track.Thumb>
+
+                            <!-- Invisible rather than absent, so a click in the groove still
+                                 pages. Opacity does not take a control out of the hit test. -->
+                            <Track.DecreaseRepeatButton>
+                                <RepeatButton Command="ScrollBar.PageLeftCommand"
+                                              Opacity="0" Focusable="False" IsTabStop="False" />
+                            </Track.DecreaseRepeatButton>
+                            <Track.IncreaseRepeatButton>
+                                <RepeatButton Command="ScrollBar.PageRightCommand"
+                                              Opacity="0" Focusable="False" IsTabStop="False" />
+                            </Track.IncreaseRepeatButton>
+                        </Track>
+                    </Border>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>

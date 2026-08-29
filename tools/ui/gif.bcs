@@ -1,0 +1,38 @@
+# Importing a GIF as a segment.
+#
+# A GIF is the awkward source on both counts a source can be awkward: it carries no audio, and
+# its rate is neither the project's nor a whole number. ffprobe reports 12.5 fps for one written
+# at 12 in a 1/100 time base, so a clip of it lands on a fractional number of timeline frames.
+#
+# That arithmetic was already right in TimelineEdits.ImportSource and in TimelineResolver, and
+# already wrong in ProjectInvariants, which compared a length in timeline frames against a count
+# of source frames — so every mixed-rate append was rejected as reading past the end of its own
+# source. A 15 fps clip failed exactly the same way; the GIF is only what made it obvious.
+
+sample base.mp4 4
+open base.mp4
+assert-has-media
+assert-segments 1
+
+# 4 seconds at 30 fps.
+state
+
+sample-gif clip.gif 3
+append clip.gif
+assert-segments 2
+
+# 36 frames at 12.5 fps is 2.88s, which is 86.4 frames of a 30 fps timeline — floored to 86, so
+# the clip never claims a frame it does not have. 120 + 86 = 206.
+assert-frame 120
+state
+
+# The picture, not just the document: testsrc2 prints its own clock into the frame, so a capture
+# inside the GIF's span says whether the rate conversion put us where we asked to be.
+goto 150
+dump-preview 01-inside-the-gif.png
+shot 02-timeline
+
+# It undoes as one step, like any other append.
+key Ctrl+Z
+assert-segments 1
+state

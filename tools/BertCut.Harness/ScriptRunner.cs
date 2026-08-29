@@ -40,6 +40,7 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
         [EditorIntent.AppendSource] = "append <path>",
         [EditorIntent.ChooseOverlayFile] = "overlay-source file <path>",
         [EditorIntent.Export] = "export is not driven by the harness; EndToEndExportTests covers it headlessly",
+        [EditorIntent.SaveFrame] = "saving a frame opens a save dialog; PreviewEngineTests covers the picture headlessly",
     };
 
     /// <summary>Runs every command. Returns the process exit code.</summary>
@@ -88,6 +89,7 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
             case "sample": Sample(rest); break;
             case "sample-angles": SampleAngles(rest); break;
             case "sample-cameras": SampleCameras(rest); break;
+            case "sample-gif": SampleGif(rest); break;
             case "open": Open(rest); break;
             case "import": Load(rest, path => session.Model.ImportAsync(path)); break;
             case "append": Load(rest, path => session.Model.AppendAsync(path)); break;
@@ -103,6 +105,8 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
             case "drag-segment": DragSegment(rest); break;
             case "scrub": Scrub(rest); break;
             case "drag-playhead": DragPlayhead(rest); break;
+            case "wheel": Wheel(rest); break;
+            case "scroll-timeline": ScrollTimeline(rest); break;
 
             case "goto": Goto(rest); break;
             case "play": session.Dispatch(EditorIntent.PlayPause); break;
@@ -122,6 +126,8 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
             case "assert-timecode": AssertTimecode(rest); break;
             case "assert-frame": AssertFrame(rest); break;
             case "assert-frame-between": AssertFrameBetween(rest); break;
+            case "assert-zoom": AssertZoom(rest); break;
+            case "assert-visible-range": AssertVisibleRange(rest); break;
             case "assert-overlay-source-start": AssertOverlaySourceStart(rest); break;
             case "assert-overlay-selected": AssertOverlaySelected(rest); break;
             case "assert-no-overlay-selected": AssertNoOverlaySelected(); break;
@@ -162,6 +168,17 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
         var seconds = tail.Length == 0 ? 6 : Number(tail, "sample");
 
         SampleMedia.Write(session.Runtime, Resolve(path), seconds);
+    }
+
+    /// <summary>A silent GIF at a fractional rate, for importing as a segment.</summary>
+    private void SampleGif(string rest)
+    {
+        var (path, tail) = Split(rest);
+        if (path.Length == 0) throw new FormatException("sample-gif needs a file name.");
+
+        var seconds = tail.Length == 0 ? 3 : Number(tail, "sample-gif");
+
+        SampleMedia.WriteGif(session.Runtime, Resolve(path), seconds);
     }
 
     /// <summary>The two-angle fixture the audio sync is meant for.</summary>
@@ -441,6 +458,45 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
         session.Settle();
     }
 
+    /// <summary>
+    /// Turns the wheel over the strip, at the frame named.
+    /// </summary>
+    /// <remarks>
+    /// The frame is the point of it. The wheel zooms about whatever is under the pointer, so
+    /// where the pointer is <i>is</i> the behaviour, and a command that only said how far to turn
+    /// would leave the anchoring — the whole reason the gesture is worth having — undriven.
+    /// </remarks>
+    private void Wheel(string rest)
+    {
+        var (frameText, notchText) = Split(rest);
+        var frame = Number(frameText, "wheel");
+        var notches = notchText.Length == 0 ? 1 : Number(notchText, "wheel");
+
+        session.Dispatcher.Invoke(() =>
+        {
+            var timeline = session.Window.Timeline;
+            timeline.Wheel(timeline.RulerPoint(frame), (int)(notches * 120));
+        });
+
+        session.Settle();
+    }
+
+    /// <summary>
+    /// Scrolls the strip so its window begins at a frame.
+    /// </summary>
+    /// <remarks>
+    /// What the scrollbar's thumb writes. The thumb itself is a stock WPF <c>Track</c> and its
+    /// drag is WPF's, not this app's — there is nothing of ours in it worth driving — so this
+    /// enters where the <c>Scroll</c> handler does.
+    /// </remarks>
+    private void ScrollTimeline(string rest)
+    {
+        var frame = Number(rest, "scroll-timeline");
+
+        session.Dispatcher.Invoke(() => session.Model.ScrollTo(frame));
+        session.Settle();
+    }
+
     /// <summary>Clicks a base segment, on the part of the track clear of any overlay band.</summary>
     private void SelectSegment(string rest)
     {
@@ -665,6 +721,15 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
             ("previewSize",
                 model.PreviewRenderSize is { } render ? Quote($"{render.Width}x{render.Height}") : "null"),
 
+            // What the strip is actually showing. Zoom is anchored on the playhead and has no
+            // scroll position of its own, so these two numbers are the whole of the view state —
+            // and a mapping that quietly stopped being applied would look exactly like one that was.
+            ("looping", model.IsLooping ? "true" : "false"),
+
+            ("zoom", model.TimelineZoom.ToString("0.##", CultureInfo.InvariantCulture)),
+            ("visibleStart", Text(model.VisibleStart)),
+            ("visibleLength", Text(model.VisibleLength)),
+
             ("status", Quote(model.Status)),
         };
 
@@ -777,6 +842,41 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
 
         if (actual != expected)
             throw new AssertionException($"expected frame {expected}, got {actual}.");
+    }
+
+    /// <summary>Asserts how far the strip is zoomed in, as a multiple of the whole timeline.</summary>
+    private void AssertZoom(string rest)
+    {
+        var expected = double.Parse(rest.Trim(), CultureInfo.InvariantCulture);
+        var actual = session.Dispatcher.Invoke(() => session.Model.TimelineZoom);
+
+        if (Math.Abs(actual - expected) > 0.001)
+            throw new AssertionException($"expected zoom {expected}, got {actual}.");
+    }
+
+    /// <summary>
+    /// Asserts the span of timeline the strip is showing.
+    /// </summary>
+    /// <remarks>
+    /// The pair that says where a click will land. Zoom alone does not: the window is anchored on
+    /// the playhead and clamped at both ends, so the same zoom shows a different span at the end
+    /// of a timeline than in the middle.
+    /// </remarks>
+    private void AssertVisibleRange(string rest)
+    {
+        var (startText, tail) = Split(rest);
+        if (startText.Length == 0 || tail.Length == 0)
+            throw new FormatException("assert-visible-range needs a start and a length.");
+
+        var expectedStart = long.Parse(startText, CultureInfo.InvariantCulture);
+        var expectedLength = long.Parse(tail.Trim(), CultureInfo.InvariantCulture);
+
+        var (start, length) = session.Dispatcher.Invoke(
+            () => (session.Model.VisibleStart, session.Model.VisibleLength));
+
+        if (start != expectedStart || length != expectedLength)
+            throw new AssertionException(
+                $"expected visible [{expectedStart}, +{expectedLength}), got [{start}, +{length}).");
     }
 
     /// <summary>

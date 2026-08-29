@@ -1,0 +1,49 @@
+# Looping the marked range — the gesture for judging a cut point.
+#
+# Mark roughly, watch the seam a few times, move a mark a frame, watch again. Without it every
+# pass costs a manual seek back, which is long enough to lose the thing being judged.
+#
+# Playback runs off a real clock — the audio device's own position at 1x forward — so every
+# assertion here is bounded, and `sleep` blocks the dispatcher so the tick after it is what
+# catches the playhead up.
+
+sample clip.mp4 10
+open clip.mp4
+assert-has-media
+
+# Nothing marked: it says so rather than looping the whole recording.
+key Shift+Space
+assert-status Mark a range
+
+goto 60
+key I
+goto 120
+key O
+
+key Shift+Space
+assert-status Looping
+assert-frame 60
+
+# It plays without a second keystroke: asking to watch the range is asking to watch it.
+sleep 500
+tick
+assert-frame-between 61 119
+
+# Round again rather than running past the out point. Two seconds of a two-second range, so
+# this crosses the end at least once and must come back inside it.
+sleep 1800
+tick
+assert-frame-between 60 119
+
+sleep 1800
+tick
+assert-frame-between 60 119
+
+shot 01-looping
+state
+
+# Off again, and playback then behaves normally.
+key Shift+Space
+assert-status Loop off
+stop
+state

@@ -95,7 +95,7 @@
                         </StackPanel>
                     </Button>
 
-                    <Button Style="{StaticResource IconButton}" Click="OnActionClick"
+                    <Button x:Name="ExportButton" Style="{StaticResource IconButton}" Click="OnActionClick"
                             Content="{StaticResource Icon.Save}"
                             Tag="{x:Static input:EditorIntent.Export}"
                             AutomationProperties.Name="Save as"
@@ -333,12 +333,45 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
                 <TextBlock x:Name="TimecodeLabel" Grid.Column="0"
                            Style="{StaticResource MonoText}" FontSize="15" />
                 <TextBlock x:Name="SelectionLabel" Grid.Column="1" Style="{StaticResource StatusText}"
                            Margin="20,0,12,0" TextTrimming="CharacterEllipsis" />
+
+                <!--
+                    Zoom, at the right-hand edge of this column — which puts it immediately left
+                    of the transport cluster without being part of it. Inside that StackPanel
+                    would have been fewer lines and would have pushed the play button off the
+                    centre line of the picture, which the whole three-column arrangement above
+                    exists to hold it on.
+
+                    They are also not transport: those seven buttons move the playhead and these
+                    three change only how much of the timeline you can see at once. The gap is
+                    the same one Mute gets on the far side, for the same reason.
+                -->
+                <StackPanel x:Name="ZoomControls" Grid.Column="2" Orientation="Horizontal"
+                            VerticalAlignment="Center" Margin="0,0,14,0">
+                    <Button Style="{StaticResource TransportButton}" Click="OnActionClick"
+                            Content="{StaticResource Icon.ZoomOut}"
+                            Tag="{x:Static input:EditorIntent.ZoomOut}"
+                            AutomationProperties.Name="Zoom out"
+                            AutomationProperties.HelpText="Shows more of the timeline." />
+
+                    <Button Style="{StaticResource TransportButton}" Click="OnActionClick"
+                            Content="{StaticResource Icon.ZoomToFit}"
+                            Tag="{x:Static input:EditorIntent.ZoomToFit}"
+                            AutomationProperties.Name="Fit the whole timeline"
+                            AutomationProperties.HelpText="Back to showing all of it." />
+
+                    <Button Style="{StaticResource TransportButton}" Click="OnActionClick"
+                            Content="{StaticResource Icon.ZoomIn}"
+                            Tag="{x:Static input:EditorIntent.ZoomIn}"
+                            AutomationProperties.Name="Zoom in"
+                            AutomationProperties.HelpText="Or the wheel, over the strip." />
+                </StackPanel>
             </Grid>
 
             <StackPanel x:Name="TransportControls" Grid.Column="1" Orientation="Horizontal"
@@ -423,7 +456,31 @@
                        HorizontalAlignment="Right" Margin="12,0,0,0" />
         </Grid>
 
-        <local:TimelineControl x:Name="Timeline" Grid.Row="3" Margin="12,0,12,6" />
+        <!--
+            The strip, and under it the one thing that can move its window without moving the
+            playhead.
+
+            The scrollbar keeps its 10px whether or not it has anything to scroll — Hidden, not
+            Collapsed. Collapsing it would hand those pixels to the preview pane, and the pane's
+            height is what ApplyPreviewSize divides to choose a composite size, so zooming the
+            timeline could rebuild every cached decoder and its scaler. Ten pixels of nothing is
+            the cheaper of the two, and it also stops the strip jumping under the pointer at the
+            moment the wheel is being turned on it.
+        -->
+        <Grid Grid.Row="3" Margin="12,0,12,6">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <local:TimelineControl x:Name="Timeline" Grid.Row="0" />
+
+            <ScrollBar x:Name="TimelineScroll" Grid.Row="1" Orientation="Horizontal"
+                       Style="{StaticResource StripScrollBar}"
+                       Visibility="Hidden" Scroll="OnTimelineScroll"
+                       Margin="0,4,0,0"
+                       AutomationProperties.Name="Scroll the timeline" />
+        </Grid>
 
         <!-- Status bar. It once led with a transport glyph — a red cross when nothing was
              moving, green chevrons for the way it was — which said what the transport

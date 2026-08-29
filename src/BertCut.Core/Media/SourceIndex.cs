@@ -22,7 +22,8 @@ namespace BertCut.Core.Media;
 /// pre-roll window is derived from, and it makes the lossless-export keyframe check O(1).
 /// </para>
 /// <para>
-/// Built once per source by a non-decoding ffprobe pass and cached on disk. About 864 KB
+/// Built once per source by a non-decoding ffprobe pass and cached on disk by
+/// <c>BertCut.Media.SourceIndexCache</c>, keyed by content key. About 864 KB
 /// per hour at 30 fps.
 /// </para>
 /// </remarks>

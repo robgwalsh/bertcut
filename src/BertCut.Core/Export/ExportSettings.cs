@@ -69,8 +69,36 @@ public sealed record ExportSettings(
     Quality Quality = Quality.Balanced,
     bool AllowLosslessFastPath = true)
 {
+    /// <summary>How long a GIF may be before the export refuses.</summary>
+    public const int DefaultGifMaxSeconds = 30;
+
     /// <summary>Audio bitrate for the re-encoded track.</summary>
     public int AudioBitrateKbps { get; init; } = 192;
+
+    /// <summary>
+    /// Frames a second in a GIF.
+    /// </summary>
+    /// <remarks>
+    /// Twelve rather than the timeline's rate. A GIF has no inter-frame compression, so every
+    /// frame costs its full palettised size and halving the rate halves the file; twelve is where
+    /// screen-recorded motion still reads as motion.
+    /// </remarks>
+    public int GifFrameRate { get; init; } = 12;
+
+    /// <summary>
+    /// The widest a GIF is written, scaled down to fit and never up.
+    /// </summary>
+    /// <remarks>
+    /// Never up, because enlarging a frame in a 256-colour palette adds bytes and no detail.
+    /// </remarks>
+    public int GifMaxWidth { get; init; } = 640;
+
+    /// <summary>Duration past which a GIF is refused rather than written.</summary>
+    public int GifMaxSeconds { get; init; } = DefaultGifMaxSeconds;
+
+    /// <summary>Whether the named output asks for a GIF.</summary>
+    public bool WantsGif =>
+        System.IO.Path.GetExtension(OutputPath).Equals(".gif", StringComparison.OrdinalIgnoreCase);
 }
 
 public enum Quality

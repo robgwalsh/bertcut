@@ -264,4 +264,48 @@ public class PreviewEngineTests : IDisposable
         Assert.False(engine.Render(new TimelineResolver(project), project.DurationFrames + 5));
         Assert.False(engine.HasFrame);
     }
+
+    /// <summary>
+    /// A still is written at the delivered size, not at whatever the preview happens to show.
+    /// </summary>
+    /// <remarks>
+    /// This is the whole of the save-a-frame feature. The pump composites at the size the preview
+    /// is <i>displayed</i> at — the delivered size over an integer divisor up to four — so saving
+    /// the buffer that is on screen would hand back a quarter-resolution still of a 4K recording
+    /// and say nothing about it. <c>MainWindow.SaveFrameAsync</c> renders again through a
+    /// throwaway engine at <c>DeliveredSize</c> for exactly this reason, which is the path here.
+    /// </remarks>
+    [SkippableFact]
+    public async Task A_saved_frame_is_written_at_the_delivered_size()
+    {
+        Skip.If(_runtime is null, "No FFmpeg 8+ build found.");
+
+        var (project, engine, indices) = await SetUpAsync(MakeSplitSource());
+        using var _engine = engine;
+
+        // A crop over the whole timeline makes the delivered size the crop's own, so the
+        // delivered size and the project output are deliberately different numbers here.
+        project = TimelineEdits.SetCrop(
+            project, new FrameRange(0, project.DurationFrames), new RectI(20, 10, 200, 120));
+
+        var (width, height) = project.DeliveredSize;
+        Assert.Equal((200, 120), (width, height));
+
+        using var still = new PreviewEngine(
+            project.Output with { Width = width, Height = height },
+            id => indices[id],
+            id => project.RequireSource(id).Path);
+
+        Assert.True(still.Render(new TimelineResolver(project), 10));
+        Assert.Equal(width, still.Canvas.Width);
+        Assert.Equal(height, still.Canvas.Height);
+
+        var path = Path.Combine(_dir, "still.png");
+        Png.Save(still.Canvas, path);
+
+        // The PNG says the same size it was rendered at: IHDR carries width and height first.
+        var bytes = await File.ReadAllBytesAsync(path);
+        Assert.Equal(width, System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(bytes.AsSpan(16, 4)));
+        Assert.Equal(height, System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(bytes.AsSpan(20, 4)));
+    }
 }

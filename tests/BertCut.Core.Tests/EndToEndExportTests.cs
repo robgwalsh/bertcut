@@ -498,4 +498,113 @@ public class EndToEndExportTests : IDisposable
         !encoder.Contains("nvenc", StringComparison.Ordinal)
         && !encoder.Contains("qsv", StringComparison.Ordinal)
         && !encoder.Contains("amf", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Naming a .gif writes one, through the same rendered picture every other path produces.
+    /// </summary>
+    /// <remarks>
+    /// The harness deliberately refuses to drive export, so this tier is where the export path
+    /// gets exercised at all — see the rules in CLAUDE.md.
+    /// </remarks>
+    [SkippableFact]
+    public async Task A_gif_export_writes_a_playable_gif()
+    {
+        Skip.If(_runtime is null, "No FFmpeg 8+ build found.");
+
+        var source = MakeSource("gif-src.mp4", seconds: 4);
+        var probe = await new MediaProber(_runtime!).ProbeAsync(source);
+
+        var project = TimelineEdits.ImportSource(
+            Project.Empty(new OutputFormat(640, 480, Rational.FromInt(30))),
+            probe.Media);
+
+        var output = Path.Combine(_dir, "out.gif");
+        var plan = ExportPlanner.Plan(
+            project, new ExportSettings(output), _runtime!.Capabilities, _ => probe.Index, _dir);
+
+        Assert.Equal(ExportMode.Gif, plan.Mode);
+        Assert.Equal(GifBlocker.None, plan.GifBlocker);
+
+        // The palette pass and the draw pass, on top of the segment render and the concat.
+        Assert.Contains(plan.Steps, s => s.Description.Contains("colours", StringComparison.Ordinal));
+        Assert.Contains(plan.Steps, s => s.Description.Contains("Writing the GIF", StringComparison.Ordinal));
+
+        await new ExportRunner(_runtime).RunAsync(plan, _dir);
+
+        Assert.True(File.Exists(output), "export produced no file");
+        Assert.Equal("gif", CodecOf(output, "v:0"));
+        Assert.InRange(DurationOf(output), 3.7, 4.3);
+
+        // Never wider than the cap, and it carries no audio track to have muxed.
+        Assert.InRange(WidthOf(output), 2, 640);
+        Assert.Equal("", CodecOf(output, "a:0"));
+    }
+
+    /// <summary>A crop reaches the GIF, because the GIF is drawn from the rendered picture.</summary>
+    [SkippableFact]
+    public async Task A_cropped_gif_is_delivered_at_the_crop_size()
+    {
+        Skip.If(_runtime is null, "No FFmpeg 8+ build found.");
+
+        var source = MakeSource("gif-crop.mp4", seconds: 4);
+        var probe = await new MediaProber(_runtime!).ProbeAsync(source);
+
+        var project = TimelineEdits.ImportSource(
+            Project.Empty(new OutputFormat(640, 480, Rational.FromInt(30))),
+            probe.Media);
+
+        // The whole timeline, so the crop's own size becomes the delivered size — and it is
+        // narrower than the GIF cap, which is what proves the scale never enlarges.
+        project = TimelineEdits.SetCrop(
+            project, new FrameRange(0, project.DurationFrames), new RectI(0, 0, 320, 240));
+
+        var output = Path.Combine(_dir, "out-crop.gif");
+        var plan = ExportPlanner.Plan(
+            project, new ExportSettings(output), _runtime!.Capabilities, _ => probe.Index, _dir);
+
+        Assert.Equal(ExportMode.Gif, plan.Mode);
+
+        await new ExportRunner(_runtime).RunAsync(plan, _dir);
+
+        Assert.Equal(320, WidthOf(output));
+    }
+
+    /// <summary>
+    /// Too long is refused before any work, and the refusal names the reason.
+    /// </summary>
+    [SkippableFact]
+    public async Task A_long_edit_refuses_to_become_a_gif()
+    {
+        Skip.If(_runtime is null, "No FFmpeg 8+ build found.");
+
+        var source = MakeSource("gif-long.mp4", seconds: 4);
+        var probe = await new MediaProber(_runtime!).ProbeAsync(source);
+
+        var project = TimelineEdits.ImportSource(
+            Project.Empty(new OutputFormat(640, 480, Rational.FromInt(30))),
+            probe.Media);
+
+        var output = Path.Combine(_dir, "too-long.gif");
+
+        // A two-second cap against a four-second edit, rather than a four-minute fixture.
+        var plan = ExportPlanner.Plan(
+            project,
+            new ExportSettings(output) { GifMaxSeconds = 2 },
+            _runtime!.Capabilities,
+            _ => probe.Index,
+            _dir);
+
+        Assert.Equal(GifBlocker.TooLong, plan.GifBlocker);
+
+        // Refused before any work: nothing to run and nothing written.
+        Assert.Empty(plan.Steps);
+        Assert.False(File.Exists(output));
+    }
+
+    private int WidthOf(string path) =>
+        int.Parse(
+            Run(_runtime!.FfprobePath,
+                ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width",
+                 "-of", "default=nw=1:nk=1", path]).Trim(),
+            System.Globalization.CultureInfo.InvariantCulture);
 }

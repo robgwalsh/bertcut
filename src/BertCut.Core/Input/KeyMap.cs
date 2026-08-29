@@ -61,9 +61,30 @@ public enum EditorIntent
 {
     None,
     PlayPause, ShuttleForward, ShuttleReverse, Stop,
+
+    /// <summary>
+    /// Play the marked range over and over instead of running past it.
+    /// </summary>
+    /// <remarks>
+    /// The gesture for judging a cut point: mark roughly, watch the seam a few times, move a
+    /// mark a frame, watch again. Without it every pass costs a manual seek back, which is long
+    /// enough to lose the thing being judged.
+    /// </remarks>
+    ToggleLoop,
     StepBack, StepForward, StepBackSecond, StepForwardSecond,
     PreviousEdit, NextEdit, GoToStart, GoToEnd,
     MarkIn, MarkOut, ClearMarks,
+
+    /// <summary>
+    /// Move the out-point onto the next keyframe, so a cut-only edit can be stream-copied.
+    /// </summary>
+    /// <remarks>
+    /// The out-point and not the in-point. A ripple delete of [in, out) leaves segments starting
+    /// at 0 and at <c>out</c>, and frame 0 is always a keyframe — so <c>out</c> is the only
+    /// boundary that decides whether <c>ExportPlanner</c> can copy the video instead of
+    /// re-encoding it. Snapping the in-point would look symmetrical and buy nothing.
+    /// </remarks>
+    SnapMarksToKeyframes,
     RippleDelete, SplitAtPlayhead,
     BeginCrop, ClearCropAtPlayhead,
     BeginOverlay, RemoveOverlayAtPlayhead,
@@ -163,6 +184,17 @@ public enum EditorIntent
     Undo, Redo,
     OpenFile, ImportSource, Export,
 
+    /// <summary>
+    /// Write the frame under the playhead out as a PNG.
+    /// </summary>
+    /// <remarks>
+    /// Handled by the window rather than the view model, alongside the other intents that need a
+    /// file dialog. The picture it saves is the composited one at its delivered size, not the
+    /// preview's — see <c>MainWindow.SaveFrameAsync</c> for why that distinction is the whole
+    /// feature.
+    /// </remarks>
+    SaveFrame,
+
     /// <summary>Add a video to the end of the base track, as opposed to importing one to overlay.</summary>
     AppendSource,
 
@@ -209,6 +241,11 @@ public static class KeyMap
     [
         // Playback and navigation
         new(EditorKey.Space, EditorModifiers.None, EditorMode.Normal, EditorIntent.PlayPause, "Play / pause"),
+
+        // Shift+Space, next to the key it modifies. Free, and it reads as "play, but round and
+        // round" rather than as a mode of its own.
+        new(EditorKey.Space, EditorModifiers.Shift, EditorMode.Normal, EditorIntent.ToggleLoop,
+            "Loop the marked range"),
         new(EditorKey.L, EditorModifiers.None, EditorMode.Normal, EditorIntent.ShuttleForward, "Shuttle forward (press again for 2x, 4x, 8x)"),
         new(EditorKey.J, EditorModifiers.None, EditorMode.Normal, EditorIntent.ShuttleReverse, "Shuttle reverse"),
         new(EditorKey.K, EditorModifiers.None, EditorMode.Normal, EditorIntent.Stop, "Stop"),
@@ -230,6 +267,12 @@ public static class KeyMap
         new(EditorKey.X, EditorModifiers.None, EditorMode.Normal, EditorIntent.RippleDelete, "Ripple delete the marked range"),
         new(EditorKey.Delete, EditorModifiers.Shift, EditorMode.Normal, EditorIntent.RippleDelete, "Ripple delete the marked range"),
         new(EditorKey.S, EditorModifiers.None, EditorMode.Normal, EditorIntent.SplitAtPlayhead, "Split at the playhead"),
+
+        // Shift+K, because K is Stop and the mnemonic is keyframe. What it buys is an export that
+        // copies the video instead of re-encoding it — file-copy speed against a full pass over
+        // the footage — and the out point is the only boundary that decides it.
+        new(EditorKey.K, EditorModifiers.Shift, EditorMode.Normal, EditorIntent.SnapMarksToKeyframes,
+            "Snap the out point to a keyframe, so the export can copy instead of re-encode"),
         new(EditorKey.C, EditorModifiers.None, EditorMode.Normal, EditorIntent.BeginCrop, "Crop the marked range, or the whole video if nothing is marked"),
         new(EditorKey.C, EditorModifiers.Shift, EditorMode.Normal, EditorIntent.ClearCropAtPlayhead, "Clear the crop under the playhead"),
         new(EditorKey.P, EditorModifiers.None, EditorMode.Normal, EditorIntent.BeginOverlay, "Overlay a clip — asks what to overlay"),
@@ -279,6 +322,16 @@ public static class KeyMap
         new(EditorKey.I, EditorModifiers.Control, EditorMode.Normal, EditorIntent.ImportSource, "Import another video to overlay"),
         new(EditorKey.A, EditorModifiers.Control, EditorMode.Normal, EditorIntent.AppendSource, "Add a video to the end of the timeline"),
         new(EditorKey.E, EditorModifiers.Control, EditorMode.Normal, EditorIntent.Export, "Save as — write the edited video to a new file"),
+
+        // A bare F, because pulling a still out of a recording is a fast thing you do while
+        // looking at one, not a file operation you go to a menu for. It was free: nothing in the
+        // editor claimed it.
+        new(EditorKey.F, EditorModifiers.None, EditorMode.Normal, EditorIntent.SaveFrame,
+            "Save this frame as a PNG"),
+
+        // Three ways in, and only these are rebindable: the wheel over the strip and the three
+        // buttons beside the transport go to the same intents, but a wheel is not a keystroke
+        // and a button prints whatever these are bound to.
         new(EditorKey.Equals, EditorModifiers.None, EditorMode.Normal, EditorIntent.ZoomIn, "Zoom in"),
         new(EditorKey.Minus, EditorModifiers.None, EditorMode.Normal, EditorIntent.ZoomOut, "Zoom out"),
         new(EditorKey.Backslash, EditorModifiers.None, EditorMode.Normal, EditorIntent.ZoomToFit, "Zoom to fit"),

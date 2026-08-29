@@ -68,6 +68,9 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     private FrameRange _pendingRange;
     private OverlayContent? _pendingContent;
     private RectI? _pendingSrc;
+    private double _timelineZoom = 1;
+    private long _visibleStart;
+    private bool _isLooping;
     private long _playhead;
     private long? _markIn;
     private long? _markOut;
@@ -269,11 +272,158 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
             // playhead, so the band and the composited frame both read this on the way out.
             UpdatePendingRange();
 
+            // The window follows only when the playhead leaves it — see FollowPlayhead.
+            FollowPlayhead();
+
             Notify();
             Notify(nameof(TimecodeText));
             RenderCurrentFrame();
         }
     }
+
+    /// <summary>
+    /// How much of the timeline the strip shows: 1 is all of it, 2 is half, and so on.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The strip mapped the whole recording across its width, which is fine for a two-minute
+    /// clip and useless for an hour: at 1167 px a pixel was three seconds, so a cut could be
+    /// placed by keyboard and not by pointer. <c>=</c>, <c>-</c> and <c>\</c> were bound to this
+    /// from the beginning and listed on the Controls page, and nothing handled them.
+    /// </para>
+    /// <para>
+    /// Zooming holds an <b>anchor frame</b> under the same fraction of the strip rather than
+    /// re-centring the window: the wheel anchors on the pointer and the keys anchor on the
+    /// playhead, so whatever you were looking at is still where you were looking at it.
+    /// </para>
+    /// </remarks>
+    public double TimelineZoom
+    {
+        get => _timelineZoom;
+        private set
+        {
+            // The floor is the whole timeline; past the ceiling a frame is wider than the strip
+            // and zooming further only removes context.
+            var clamped = Math.Clamp(value, 1, MaxTimelineZoom);
+            if (Math.Abs(_timelineZoom - clamped) < 0.0001) return;
+
+            _timelineZoom = clamped;
+
+            Notify();
+            Notify(nameof(IsZoomed));
+            Notify(nameof(VisibleStart));
+            Notify(nameof(VisibleLength));
+        }
+    }
+
+    /// <summary>How many timeline frames the strip shows.</summary>
+    public long VisibleLength =>
+        DurationFrames <= 0
+            ? 0
+            : Math.Min(DurationFrames, Math.Max(2, (long)(DurationFrames / _timelineZoom)));
+
+    /// <summary>
+    /// The first frame the strip shows.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A position of its own, rather than a function of the playhead. It was the latter first —
+    /// the window centred on the playhead and recomputed in its setter — which needs no
+    /// scrollbar, no pan gesture and no state to keep in step, and is genuinely the smaller
+    /// thing. Two costs sank it. A scrollbar cannot exist over a derived window, because dragging
+    /// the thumb has nowhere to write and the next repaint puts it back where it was. And a
+    /// window centred on the playhead moves on <i>every frame of playback</i>, which invalidates
+    /// the waveform cache — keyed on the window, and rightly — sixty times a second at any zoom
+    /// above 1, to scroll the picture by a pixel.
+    /// </para>
+    /// <para>
+    /// Holding it still costs exactly one rule, in <see cref="FollowPlayhead"/>: the window moves
+    /// when the playhead leaves it and not before. Playback then pages once a screenful instead
+    /// of sliding continuously, which is both cheaper and easier to read.
+    /// </para>
+    /// </remarks>
+    public long VisibleStart
+    {
+        get => ClampStart(_visibleStart);
+        set
+        {
+            var clamped = ClampStart(value);
+            if (_visibleStart == clamped) return;
+
+            _visibleStart = clamped;
+            Notify();
+        }
+    }
+
+    /// <summary>The furthest right the window can begin and still be full.</summary>
+    /// <remarks>
+    /// The scrollbar's range, so it is public for the same reason <see cref="VisibleLength"/> is:
+    /// the thumb's size and travel are both facts about the window, and computing them anywhere
+    /// else means two answers to keep in agreement.
+    /// </remarks>
+    public long MaxVisibleStart => Math.Max(0, DurationFrames - VisibleLength);
+
+    private long ClampStart(long start) => Math.Clamp(start, 0, MaxVisibleStart);
+
+    /// <summary>True when the strip is showing less than the whole timeline.</summary>
+    public bool IsZoomed => VisibleLength < DurationFrames;
+
+    /// <summary>
+    /// Brings the window to the playhead, but only once the playhead has left it.
+    /// </summary>
+    /// <remarks>
+    /// Called from wherever the playhead is written, so scrolling still happens by moving the
+    /// playhead — a key, the ruler, an audio sync — exactly as it did when the window was derived
+    /// from it. What changed is that a playhead moving <i>within</i> the window now moves nothing,
+    /// which is what lets the scrollbar hold a position at all, and what stops playback throwing
+    /// the waveform away every frame.
+    /// </remarks>
+    private void FollowPlayhead()
+    {
+        var length = VisibleLength;
+        if (length <= 0 || length >= DurationFrames) return;
+
+        var start = VisibleStart;
+        if (_playhead >= start && _playhead < start + length) return;
+
+        // A margin behind the direction of travel, so a page forward still shows a little of
+        // where it came from and a page back a little of where it is going.
+        var margin = length / 8;
+
+        VisibleStart = _playhead >= start + length
+            ? _playhead - margin
+            : _playhead - length + margin;
+    }
+
+    /// <summary>
+    /// Whether playback rounds on the marked range instead of running past it.
+    /// </summary>
+    /// <remarks>
+    /// A property of the transport rather than of the document, so it is not undoable and not
+    /// saved — it describes what you are doing right now, the way the shuttle rate does.
+    /// </remarks>
+    public bool IsLooping
+    {
+        get => _isLooping;
+        private set
+        {
+            if (_isLooping == value) return;
+
+            _isLooping = value;
+            Notify();
+            Notify(nameof(TransportText));
+        }
+    }
+
+    /// <summary>
+    /// The range playback rounds on, which is the marked one.
+    /// </summary>
+    /// <remarks>
+    /// Read live rather than captured when the loop starts, so moving a mark while it is running
+    /// changes the loop on the next pass. That is the whole gesture: watch the seam, nudge a
+    /// mark, watch it again without stopping.
+    /// </remarks>
+    public FrameRange? LoopRange => SelectedRange;
 
     public long? MarkIn { get => _markIn; private set { _markIn = value; Notify(); Notify(nameof(SelectionText)); } }
 
@@ -302,14 +452,24 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
     public string TimecodeText => Format(Playhead) + "  /  " + Format(DurationFrames);
 
-    public string TransportText => ShuttleRate switch
+    public string TransportText
     {
-        0 => "Paused",
-        1 => "Playing",
-        > 1 => $"Forward {ShuttleRate}x",
-        -1 => "Reverse",
-        _ => $"Reverse {-ShuttleRate}x",
-    };
+        get
+        {
+            var rate = ShuttleRate switch
+            {
+                0 => "Paused",
+                1 => "Playing",
+                > 1 => $"Forward {ShuttleRate}x",
+                -1 => "Reverse",
+                _ => $"Reverse {-ShuttleRate}x",
+            };
+
+            // The one piece of transport state with no button and no lit chip of its own, so the
+            // label is the only thing that says it is on.
+            return IsLooping ? $"{rate} · Loop" : rate;
+        }
+    }
 
     /// <summary>
     /// True while the playhead is not moving, which is which of the two middle buttons the
@@ -496,9 +656,17 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
             if (usable)
             {
-                foreach (var source in restored!.Sources)
-                    if (!_indices.ContainsKey(source.Id))
-                        _indices[source.Id] = (await new MediaProber(_runtime).ProbeAsync(source.Path)).Index;
+                // Together rather than one at a time: each of these is an independent probe of a
+                // different file, and a restore is on the path between launching and being able
+                // to edit. Serially, a session holding three sources waited out three of them.
+                var pending = restored!.Sources
+                    .Where(source => !_indices.ContainsKey(source.Id))
+                    .Select(async source =>
+                        (source.Id, (await new MediaProber(_runtime).ProbeAsync(source.Path)).Index))
+                    .ToArray();
+
+                foreach (var (id, index) in await Task.WhenAll(pending))
+                    _indices[id] = index;
 
                 _document.Replace("Restore session", restored);
             }
@@ -506,6 +674,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
             _playhead = 0;
             MarkIn = null;
             MarkOut = null;
+            ResetTimelineWindow();
             Mode = EditorMode.Normal;
 
             foreach (var source in _document.Current.Sources) BeginPeaks(source);
@@ -618,6 +787,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
             Notify(nameof(Playhead));
             Notify(nameof(TimecodeText));
+            FollowPlayhead();
             RenderCurrentFrame();
 
             var stretched = probe.Media.Width * Project.Output.Height
@@ -681,6 +851,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         Mode = EditorMode.Normal;
         Notify(nameof(Playhead));
         Notify(nameof(TimecodeText));
+        ResetTimelineWindow();
 
         // Decoders are cached per source, and the sources that were dropped here will
         // never be asked for again.
@@ -750,6 +921,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         _playhead = 0;
         MarkIn = null;
         MarkOut = null;
+        ResetTimelineWindow();
 
         // The field rather than the property: the setter renders, and there is nothing left
         // to render with.
@@ -798,6 +970,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         switch (intent)
         {
             case EditorIntent.PlayPause: ShuttleRate = ShuttleRate == 0 ? 1 : 0; RestartClock(); break;
+            case EditorIntent.ToggleLoop: ToggleLoop(); break;
             case EditorIntent.Stop: ShuttleRate = 0; break;
             case EditorIntent.ShuttleForward: ShuttleRate = ShuttleRate < 1 ? 1 : Math.Min(8, ShuttleRate * 2); RestartClock(); break;
             case EditorIntent.ShuttleReverse: ShuttleRate = ShuttleRate > -1 ? -1 : Math.Max(-8, ShuttleRate * 2); RestartClock(); break;
@@ -831,6 +1004,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
             case EditorIntent.RippleDelete: RippleDelete(); break;
             case EditorIntent.SplitAtPlayhead: Apply($"Split at {Format(Playhead)}", p => TimelineEdits.SplitAt(p, Playhead)); break;
+            case EditorIntent.SnapMarksToKeyframes: SnapMarksToKeyframes(); break;
             case EditorIntent.ClearCropAtPlayhead: ClearCropAtPlayhead(); break;
             case EditorIntent.RemoveOverlayAtPlayhead: RemoveOverlay(); break;
             case EditorIntent.DeleteSelection: DeleteSelection(); break;
@@ -864,9 +1038,115 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
             case EditorIntent.ToggleOverlayMute: ToggleOverlayMute(); break;
 
+            // The three keys that were bound to nothing. From the keyboard the anchor is the
+            // playhead, so these change how much is shown and never where you are; the wheel
+            // hands over the frame under the pointer instead.
+            case EditorIntent.ZoomIn: ZoomBy(2); break;
+            case EditorIntent.ZoomOut: ZoomBy(0.5); break;
+            case EditorIntent.ZoomToFit: ZoomToFit(); break;
+
             case EditorIntent.Undo: if (_document.Undo()) Status = "Undone"; break;
             case EditorIntent.Redo: if (_document.Redo()) Status = "Redone"; break;
         }
+    }
+
+    /// <summary>
+    /// The tightest the strip zooms.
+    /// </summary>
+    /// <remarks>
+    /// A ceiling in multiples of the whole timeline rather than in frames per pixel, because the
+    /// useful limit depends on how long the recording is: 512x of a one-hour recording is about
+    /// seven seconds across the strip, which is as close as placing a cut ever needs.
+    /// </remarks>
+    private const double MaxTimelineZoom = 512;
+
+    /// <summary>
+    /// Zooms by a factor about an anchor frame, and says what is now on screen.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The anchor keeps its fraction of the strip across the change, so the frame under the
+    /// pointer — or under the playhead, for the keys — does not move while everything around it
+    /// spreads out or closes in. Re-centring on the playhead instead is one line shorter and
+    /// throws away the thing a wheel gesture is for: aiming at a spot and getting closer to it.
+    /// </para>
+    /// <para>
+    /// Reported in seconds rather than as a multiplier, because "showing 12s" is a fact about
+    /// the strip and "4x" is a fact about the arithmetic behind it.
+    /// </para>
+    /// </remarks>
+    public void ZoomBy(double factor, long? anchor = null)
+    {
+        if (!HasMedia) return;
+
+        var before = TimelineZoom;
+        var frame = Math.Clamp(anchor ?? _playhead, 0, Math.Max(0, DurationFrames - 1));
+
+        // Where the anchor sits across the strip now, so it can be put back there after.
+        var length = VisibleLength;
+        var fraction = length <= 0 ? 0.5 : Math.Clamp((frame - VisibleStart) / (double)length, 0, 1);
+
+        TimelineZoom *= factor;
+
+        if (Math.Abs(TimelineZoom - before) < 0.0001)
+        {
+            Status = TimelineZoom <= 1 ? "Already showing the whole timeline" : "Zoomed in as far as it goes";
+            return;
+        }
+
+        VisibleStart = frame - (long)(fraction * VisibleLength);
+
+        ReportWindow();
+    }
+
+    /// <summary>Puts the whole timeline back on the strip.</summary>
+    public void ZoomToFit()
+    {
+        if (!HasMedia) return;
+
+        TimelineZoom = 1;
+        VisibleStart = 0;
+        Status = "Showing the whole timeline";
+    }
+
+    /// <summary>Scrolls the strip to begin at a frame, which is what the scrollbar writes to.</summary>
+    /// <remarks>
+    /// A method rather than the property alone so the status line says where the window went:
+    /// the thumb is the one way of moving it that leaves the playhead — and so the timecode —
+    /// exactly where it was, and without this nothing in the window would name the new span.
+    /// </remarks>
+    public void ScrollTo(long start)
+    {
+        if (!HasMedia || !IsZoomed) return;
+
+        var before = VisibleStart;
+        VisibleStart = start;
+
+        if (VisibleStart != before) ReportWindow();
+    }
+
+    /// <summary>Says which span of the timeline the strip is showing.</summary>
+    private void ReportWindow() =>
+        Status = IsZoomed
+            ? $"Showing {Format(VisibleStart)} to {Format(VisibleStart + VisibleLength)} " +
+              $"of {Format(DurationFrames)}"
+            : "Showing the whole timeline";
+
+    /// <summary>Puts the strip back to showing everything, for a document that is not the one it was.</summary>
+    /// <remarks>
+    /// Zoom is a property of the view rather than of the document, so it is not undone and not
+    /// saved — but a window into an hour of footage means nothing once the footage is a different
+    /// hour, and a scroll position into a timeline that no longer exists is worse than nothing.
+    /// </remarks>
+    private void ResetTimelineWindow()
+    {
+        _timelineZoom = 1;
+        _visibleStart = 0;
+
+        Notify(nameof(TimelineZoom));
+        Notify(nameof(IsZoomed));
+        Notify(nameof(VisibleStart));
+        Notify(nameof(VisibleLength));
     }
 
     /// <summary>Pixels a single arrow press moves the pending rectangle.</summary>
@@ -2009,6 +2289,84 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
     private int FramesPerSecond => Math.Max(1, (int)Math.Round(Project.Output.FrameRate.Approx));
 
+    /// <summary>
+    /// Moves the out point onto the next keyframe, so a cut-only edit can be stream-copied.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The out point, and only the out point.</b> A ripple delete of <c>[in, out)</c> leaves
+    /// one segment starting at source frame 0 and one starting at <c>out</c>; frame 0 is always a
+    /// keyframe, so <c>out</c> is the single boundary <c>ExportPlanner.FindLosslessBlocker</c>
+    /// can fail on. Snapping the in point too would look symmetrical and change nothing.
+    /// </para>
+    /// <para>
+    /// It searches forward in <i>timeline</i> frames rather than converting the mark into source
+    /// space and back. The inverse mapping is the part that would have to know about rate
+    /// conversion and segment boundaries, and getting it subtly wrong would put the cut one frame
+    /// from the keyframe — which reads as the feature simply not working. A GOP is a few hundred
+    /// frames, so the scan is bounded and cheap, and it asks the same question the export will.
+    /// </para>
+    /// <para>
+    /// Forward rather than to the nearest, because a cut that snaps backwards keeps footage the
+    /// user asked to remove. Losing a few frames they meant to keep is recoverable by looking;
+    /// silently keeping a few they meant to cut is not.
+    /// </para>
+    /// </remarks>
+    private void SnapMarksToKeyframes()
+    {
+        if (SelectedRange is not { } range)
+        {
+            Status = "Mark a range with I and O first.";
+            return;
+        }
+
+        var snapped = KeyframeAtOrAfter(range.End);
+
+        if (snapped is null)
+        {
+            Status = "No keyframe after the out point — the export will re-encode.";
+            return;
+        }
+
+        if (snapped == range.End)
+        {
+            Status = "The out point is already on a keyframe.";
+            return;
+        }
+
+        var moved = snapped.Value - range.End;
+
+        MarkIn = range.Start;
+        MarkOut = snapped;
+
+        Status = $"Out point moved {moved} frame{(moved == 1 ? "" : "s")} to a keyframe "
+               + $"— {Format(range.Start)} to {Format(snapped.Value)}";
+    }
+
+    /// <summary>
+    /// The first timeline frame at or after <paramref name="from"/> whose source frame is a
+    /// keyframe, or null when there is none before the end.
+    /// </summary>
+    private long? KeyframeAtOrAfter(long from)
+    {
+        if (!HasMedia) return null;
+
+        var resolver = new TimelineResolver(Project);
+
+        for (var frame = Math.Max(0, from); frame < DurationFrames; frame++)
+        {
+            if (resolver.Resolve(frame) is not { } resolution) continue;
+
+            if (_indices.TryGetValue(resolution.SourceId, out var index)
+                && index.IsKeyFrame(resolution.SourceFrame))
+            {
+                return frame;
+            }
+        }
+
+        return null;
+    }
+
     private void RippleDelete()
     {
         if (SelectedRange is not { } range)
@@ -2030,9 +2388,40 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
 
         Notify(nameof(Playhead));
         Notify(nameof(TimecodeText));
+        FollowPlayhead();
         RenderCurrentFrame();
 
-        Status = $"{label} — Ctrl+Z to undo";
+        // Said here rather than discovered mid-export. Whether the video can be copied is decided
+        // by where the cuts landed, and this is the moment the user can still move one: Shift+K
+        // walks the out point to the next keyframe. Learning it from a progress bar two minutes
+        // into a re-encode is learning it too late to do anything about.
+        Status = $"{label} — {ExportSpeedHint()} — Ctrl+Z to undo";
+    }
+
+    /// <summary>
+    /// Whether the edit as it stands can be exported by copying the video, in a few words.
+    /// </summary>
+    private string ExportSpeedHint()
+    {
+        if (!HasMedia) return "";
+
+        try
+        {
+            var blocker = ExportPlanner.FindLosslessBlocker(
+                Project, RenderPlan.Build(Project), new ExportSettings("out.mp4"), IndexOf);
+
+            return blocker switch
+            {
+                LosslessBlocker.None => "exports by copying",
+                LosslessBlocker.CutsMissKeyframes => "will re-encode (Shift+K snaps to a keyframe)",
+                _ => "will re-encode",
+            };
+        }
+        catch (Exception e) when (e is InvalidOperationException or KeyNotFoundException)
+        {
+            // The hint is a courtesy; nothing about a cut depends on it.
+            return "";
+        }
     }
 
     private void ClearCropAtPlayhead()
@@ -2086,6 +2475,65 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     }
 
     // ---- playback ----------------------------------------------------------------
+
+    /// <summary>Turns looping on or off, and starts playing if it is not already.</summary>
+    /// <remarks>
+    /// Pressing it is a request to watch the range, so it plays: asking for a loop and then having
+    /// to press space as well would be a second keystroke for the thing just asked for.
+    /// </remarks>
+    private void ToggleLoop()
+    {
+        if (IsLooping)
+        {
+            IsLooping = false;
+            Status = "Loop off";
+            return;
+        }
+
+        if (LoopRange is not { } range)
+        {
+            Status = "Mark a range with I and O first.";
+            return;
+        }
+
+        IsLooping = true;
+        Status = $"Looping {Format(range.Start)} to {Format(range.End)}";
+
+        // Start from the top of the range when the playhead is outside it, so the first pass is a
+        // whole one rather than whatever was left of it.
+        if (_playhead < range.Start || _playhead >= range.End) SeekForLoop(range.Start);
+        else if (ShuttleRate == 0) { ShuttleRate = 1; RestartClock(); }
+    }
+
+    /// <summary>
+    /// Moves the playhead back to the top of the loop and takes the sound with it.
+    /// </summary>
+    /// <remarks>
+    /// The audio device is the master clock at 1x forward, so a wrap cannot just move the
+    /// playhead — the next tick would read the device's position and jump straight back. The
+    /// device is re-opened at the new frame instead, which is the same thing an undo during
+    /// playback already does. There is an audible seam at the wrap; that is honest, and it is the
+    /// same seam a cut boundary has.
+    /// </remarks>
+    private void SeekForLoop(long frame)
+    {
+        _playhead = Math.Clamp(frame, 0, Math.Max(0, DurationFrames - 1));
+
+        UpdatePendingRange();
+
+        Notify(nameof(Playhead));
+        Notify(nameof(TimecodeText));
+        FollowPlayhead();
+
+        if (ShuttleRate == 0) ShuttleRate = 1;
+
+        RestartClock();
+        RestartAudioIfPlaying();
+
+        if (!_player.IsRunning && _shuttleRate == 1) SyncAudioTransport();
+
+        RenderCurrentFrame();
+    }
 
     private void RestartClock()
     {
@@ -2183,6 +2631,15 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         var target = _player.IsRunning
             ? _player.PositionFrames
             : _playbackStartFrame + (long)(_clock.Elapsed.TotalSeconds * Project.Output.FrameRate.Approx * ShuttleRate);
+
+        // Round again rather than running past the out point. Checked before the end-of-timeline
+        // case below, because a loop whose range ends on the last frame would otherwise stop there
+        // once instead of wrapping.
+        if (IsLooping && LoopRange is { } loop && target >= loop.End)
+        {
+            SeekForLoop(loop.Start);
+            return;
+        }
 
         if (target >= DurationFrames || (_player.IsRunning && _player.HasFinished))
         {
@@ -2446,6 +2903,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         if (_playhead >= project.DurationFrames)
             _playhead = Math.Max(0, project.DurationFrames - 1);
 
+        FollowPlayhead();
         // An undo reached through placement mode can shorten the timeline, or bring back a
         // clip, under a band that is still being aimed.
         UpdatePendingRange();

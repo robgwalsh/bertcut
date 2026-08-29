@@ -1,0 +1,135 @@
+# Zooming and scrolling the timeline strip.
+#
+# `=`, `-` and `\` were bound to ZoomIn/ZoomOut/ZoomToFit from the first commit and listed on
+# the Controls page, and nothing anywhere handled them — unlike the razor tool and Ctrl+S, which
+# are absent on purpose and say so. The strip mapped the whole recording across its width, so on
+# a long one a pixel was seconds and a cut could be placed by keyboard and not by pointer.
+#
+# Three things are checked here, in order of how easily they break:
+#
+#   1. XOf and FrameAt stay each other's exact inverse at every zoom. A scrub is the one
+#      gesture that goes through both, which is why the assertions lean on it.
+#   2. Zooming holds an anchor frame under the same fraction of the strip — the playhead for
+#      the keys, the frame under the pointer for the wheel.
+#   3. The window is a position of its own, so it moves only when the playhead leaves it or
+#      the scrollbar is dragged. A playhead moving inside the window moves nothing.
+
+sample clip.mp4 20
+open clip.mp4
+assert-has-media
+
+# 20 seconds at 30 fps.
+assert-zoom 1
+assert-visible-range 0 600
+
+# ---- zooming in and out ------------------------------------------------------------------
+goto 300
+
+key =
+assert-zoom 2
+assert-visible-range 150 300
+assert-frame 300
+
+key =
+assert-zoom 4
+assert-visible-range 225 150
+
+# Zoom changes what is shown and never where we are.
+assert-frame 300
+
+key -
+assert-zoom 2
+key \
+assert-zoom 1
+assert-visible-range 0 600
+
+# ---- the window holds still until the playhead leaves it ----------------------------------
+key =
+key =
+assert-zoom 4
+assert-visible-range 225 150
+
+# Inside the window. Nothing moves — this is the rule that lets the scrollbar hold a position
+# and that stops playback throwing the waveform away sixty times a second.
+goto 240
+assert-visible-range 225 150
+goto 370
+assert-visible-range 225 150
+
+# Out the front, and out the back. A margin of an eighth is kept behind the direction of
+# travel; at either end the clamp takes over.
+goto 60
+assert-visible-range 0 150
+
+goto 570
+assert-visible-range 450 150
+
+# ---- a click lands where it looks --------------------------------------------------------
+# The inverse mapping. Zoomed to 4x with the window clamped at the end, the middle of the strip
+# is frame 525 — which is only true if XOf and FrameAt agree about the window.
+scrub 525
+assert-frame 525
+
+key \
+assert-zoom 1
+scrub 300
+assert-frame 300
+
+# ---- the scrollbar ------------------------------------------------------------------------
+# The one gesture that moves the window without moving the playhead, which is the whole reason
+# the window stopped being a function of it.
+key =
+key =
+assert-visible-range 225 150
+assert-frame 300
+
+scroll-timeline 0
+assert-visible-range 0 150
+assert-frame 300
+
+scroll-timeline 400
+assert-visible-range 400 150
+assert-frame 300
+
+# Clamped at the far end rather than sliding into empty space.
+scroll-timeline 9999
+assert-visible-range 450 150
+
+# And it does nothing at all when there is nothing to scroll.
+key \
+scroll-timeline 300
+assert-visible-range 0 600
+
+# ---- the wheel ----------------------------------------------------------------------------
+# It anchors on the pointer, not the playhead: the frame under the cursor stays under the
+# cursor. Turning it at frame 500 with the playhead at 300 is what tells the two apart.
+goto 300
+assert-visible-range 0 600
+
+wheel 500 1
+assert-zoom 2
+assert-visible-range 250 300
+assert-frame 300
+
+# Two notches in one event are two steps, not one and a discarded remainder.
+wheel 500 2
+assert-zoom 8
+assert-visible-range 438 75
+
+# And back down. Negative notches zoom out about the same point.
+wheel 500 -3
+assert-zoom 1
+assert-visible-range 0 600
+
+# ---- the ceiling and the floor -----------------------------------------------------------
+key \
+key -
+assert-zoom 1
+assert-status whole timeline
+
+shot 01-zoomed-out
+key =
+key =
+key =
+shot 02-zoomed-in
+state

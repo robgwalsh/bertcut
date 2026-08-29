@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using BertCut.Core.Session;
 using BertCut.Media;
+using BertCut.Media.Audio;
 using BertCut.Media.Decode;
 using Velopack;
 
@@ -56,10 +57,14 @@ public partial class App : Application
             return;
         }
 
-        // The timeline no longer draws thumbnails, so nothing reads this cache and nothing
-        // writes it — but earlier versions could have left gigabytes of it on disk. A zero
-        // budget reclaims that, on a background thread, without blocking a user action.
-        _ = Task.Run(() => FilmstripCache.Trim(budgetBytes: 0));
+        // Neither of these blocks a user action, and both are bounded. The purge reclaims what
+        // earlier versions left behind; the trim is what keeps the envelope cache from growing
+        // without end, since nothing else ever deletes one.
+        _ = Task.Run(() =>
+        {
+            FilmstripCache.PurgeThumbnails();
+            AudioPeaksCache.Trim();
+        });
 
         var window = new MainWindow(runtime);
         MainWindow = window;

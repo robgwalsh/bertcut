@@ -20,18 +20,28 @@ public sealed class MediaProber(FfmpegRuntime runtime)
     /// Probes a file, building its <see cref="SourceIndex"/>.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// This is the step that makes variable frame rate a non-issue. Screen recorders emit
     /// VFR routinely, so a frame's timestamp cannot be computed from a nominal rate; the
     /// packet pass below records the real timestamps once, and everything above the
     /// decoder then works in exact frame indices.
+    /// </para>
+    /// <para>
+    /// The content key is computed first because it is the cache key, and it is two 1 MiB reads
+    /// regardless of file size. On a hit the three ffprobe launches below never happen — which is
+    /// what a repeat open, an append, and a session restore all are.
+    /// </para>
     /// </remarks>
     public async Task<ProbeResult> ProbeAsync(string path, CancellationToken cancellationToken = default)
     {
         if (!File.Exists(path)) throw new FileNotFoundException("Source file not found.", path);
 
+        var contentKey = await ComputeContentKeyAsync(path, cancellationToken).ConfigureAwait(false);
+
+        if (SourceIndexCache.Load(contentKey, path) is { } cached) return cached;
+
         var streams = await ReadStreamInfoAsync(path, cancellationToken).ConfigureAwait(false);
         var index = await ReadFrameIndexAsync(path, cancellationToken).ConfigureAwait(false);
-        var contentKey = await ComputeContentKeyAsync(path, cancellationToken).ConfigureAwait(false);
 
         var nominalRate = streams.AverageFrameRate.Num > 0 ? streams.AverageFrameRate : Rational.FromInt(30);
 
@@ -49,7 +59,11 @@ public sealed class MediaProber(FfmpegRuntime runtime)
             VideoCodec: streams.VideoCodec,
             PixelFormat: streams.PixelFormat);
 
-        return new ProbeResult(media, index);
+        var result = new ProbeResult(media, index);
+
+        SourceIndexCache.Save(contentKey, result);
+
+        return result;
     }
 
     /// <summary>
@@ -200,8 +214,17 @@ public sealed class MediaProber(FfmpegRuntime runtime)
             ? rational
             : null;
 
+    /// <summary>ffprobe processes this type has launched, ever.</summary>
+    /// <remarks>
+    /// What <see cref="SourceIndexCache"/> exists to drive to zero on a repeat open. Counted
+    /// rather than timed, for the reason <c>VideoDecoder.SeekCount</c> gives.
+    /// </remarks>
+    internal static int ProbeLaunches;
+
     private async Task<string> RunProbeAsync(string[] args, CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref ProbeLaunches);
+
         var psi = new ProcessStartInfo(runtime.FfprobePath)
         {
             RedirectStandardOutput = true,

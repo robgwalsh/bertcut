@@ -126,29 +126,41 @@ public sealed class FilmstripCache(FfmpegRuntime runtime)
     }
 
     /// <summary>
-    /// Trims the cache to a size budget, oldest first.
+    /// Deletes the thumbnails this class used to write, leaving everything else alone.
     /// </summary>
     /// <remarks>
-    /// Run on a background thread at startup. Deleting a filmstrip is always safe — it
-    /// costs a rebuild, never data.
+    /// <para>
+    /// Nothing reads or writes a filmstrip any more — the timeline draws segment fills and a
+    /// waveform instead — but earlier versions could have left gigabytes of JPEGs behind, so
+    /// the reclaim still has to happen once on each machine.
+    /// </para>
+    /// <para>
+    /// <b>It removes files, never directories.</b> This shares a cache root with
+    /// <see cref="Audio.AudioPeaksCache"/>, and the two write into the <i>same</i>
+    /// <c>cache/&lt;contentKey&gt;</c> directory — so a whole-directory delete here takes the audio
+    /// envelope with it. It did: this ran at every startup with a zero budget, which made every
+    /// directory over budget, so <c>peaks.bin</c> was deleted on every launch and the envelope
+    /// was rebuilt by a full audio decode on the first open after each one. Nothing said so,
+    /// because the cost landed on the next thing the user did rather than here.
+    /// </para>
     /// </remarks>
-    public static void Trim(long budgetBytes = 4L * 1024 * 1024 * 1024)
+    public static void PurgeThumbnails()
     {
         if (!Directory.Exists(Root)) return;
 
-        var directories = new DirectoryInfo(Root)
-            .EnumerateDirectories()
-            .Select(d => (Directory: d, Size: d.EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length)))
-            .OrderByDescending(d => d.Directory.LastWriteTimeUtc)
-            .ToList();
-
-        long running = 0;
-        foreach (var (directory, size) in directories)
+        foreach (var directory in new DirectoryInfo(Root).EnumerateDirectories())
         {
-            running += size;
-            if (running <= budgetBytes) continue;
+            try
+            {
+                foreach (var file in directory.EnumerateFiles("t*.jpg")) file.Delete();
 
-            try { directory.Delete(recursive: true); }
+                var marker = Path.Combine(directory.FullName, ".complete");
+                if (File.Exists(marker)) File.Delete(marker);
+
+                // Only when this class was the sole occupant. A directory that still holds an
+                // envelope is not ours to remove.
+                if (!directory.EnumerateFileSystemInfos().Any()) directory.Delete();
+            }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* in use */ }
         }
     }

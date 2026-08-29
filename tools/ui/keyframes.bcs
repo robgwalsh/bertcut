@@ -1,0 +1,55 @@
+# Snapping a cut onto a keyframe, which is what decides whether an export copies or re-encodes.
+#
+# ExportPlanner has always known: FindLosslessBlocker returns CutsMissKeyframes, and
+# SnappedBoundaries has always computed where the marks would land if moved. Neither was
+# reachable — the user learned "a cut resumes mid-GOP" from the status line partway through an
+# export that was already running, which is too late to do anything about it.
+#
+# The out point is the only boundary that matters. A ripple delete of [in, out) leaves segments
+# starting at source frame 0 and at `out`, and frame 0 is always a keyframe.
+
+sample clip.mp4 10
+open clip.mp4
+assert-has-media
+
+# The sample is written with -g 30, so keyframes land every 30 frames.
+goto 40
+key I
+goto 100
+key O
+assert-marks 40 100
+
+# 100 is not a multiple of 30; the next keyframe at or after it is 120.
+key Shift+K
+assert-marks 40 120
+assert-status keyframe
+
+# Forward, never backward: snapping back would keep footage the user asked to remove.
+key Shift+K
+assert-status already on a keyframe
+assert-marks 40 120
+
+key X
+assert-status exports by copying
+
+# ---- and the case it is for -------------------------------------------------------------
+reset
+open clip.mp4
+goto 40
+key I
+goto 101
+key O
+key X
+assert-status re-encode
+
+# ---- the marks are drawn where they can be aimed at ---------------------------------------
+# Keyframe marks appear in the ruler only when the window is short enough for them to be
+# individually meaningful; at zoom 1 a long recording would paint the lane solid.
+reset
+open clip.mp4
+goto 150
+key =
+key =
+key =
+shot 01-keyframe-marks
+state

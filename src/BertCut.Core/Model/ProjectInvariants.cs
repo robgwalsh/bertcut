@@ -46,10 +46,20 @@ public static class ProjectInvariants
             if (!sourceIds.Contains(seg.SourceId))
                 return $"base[{i}] references unknown source id {seg.SourceId}";
 
+            // A segment's length is in *timeline* frames; the frames it reads are its source's,
+            // counted at the source's own rate. The two are only the same number when the rates
+            // match, which is why this converts before comparing — appending a 15 fps clip to a
+            // 30 fps project asks for twice as many timeline frames as it has source frames, and
+            // comparing them directly rejected every mixed-rate import the resolver handles
+            // perfectly well. The frame actually read for the last timeline frame is what has to
+            // exist, so the conversion floors the last offset rather than the length.
             var src = p.RequireSource(seg.SourceId);
-            if (seg.SourceStartFrame + seg.LengthFrames > src.FrameCount)
-                return $"base[{i}] reads source frames [{seg.SourceStartFrame}, " +
-                       $"{seg.SourceStartFrame + seg.LengthFrames}) past the source's {src.FrameCount} frames";
+            var lastSourceOffset = ToSourceFrames(seg.LengthFrames - 1, src, p.Output);
+
+            if (seg.SourceStartFrame + lastSourceOffset >= src.FrameCount)
+                return $"base[{i}] reads source frame " +
+                       $"{seg.SourceStartFrame + lastSourceOffset} past the source's " +
+                       $"{src.FrameCount} frames";
 
             expectedStart += seg.LengthFrames;
         }
@@ -107,6 +117,19 @@ public static class ProjectInvariants
 
         return null;
     }
+
+    /// <summary>
+    /// Converts an offset in timeline frames to an offset in the source's own frames.
+    /// </summary>
+    /// <remarks>
+    /// The same mapping <c>TimelineResolver</c> reads through, and deliberately the same floor:
+    /// this must agree with what will actually be decoded, or it rejects documents that work and
+    /// accepts documents that do not.
+    /// </remarks>
+    private static long ToSourceFrames(long offset, SourceMedia source, OutputFormat output) =>
+        source.FrameRate.EquivalentTo(output.FrameRate)
+            ? offset
+            : RationalMath.RescaleFloor(offset, output.FrameRate.Inverse, source.FrameRate.Inverse);
 
     private static string? ValidateSpans(FrameRange[] ranges, long duration, string name)
     {

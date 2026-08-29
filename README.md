@@ -43,7 +43,7 @@ src/BertCut.Core     timeline model, edits, export planner, audio correlation
 src/BertCut.Media    ffmpeg decode, probing, preview compositing, audio playback,
                      export process driving
 src/BertCut.App      WPF shell, timeline, settings screen
-tests/               303 tests; the ffmpeg-dependent ones skip if it isn't installed
+tests/               348 tests; the ffmpeg-dependent ones skip if it isn't installed
 ```
 
 `Core` deliberately depends on nothing but the BCL, so ripple-delete arithmetic, the
@@ -89,7 +89,8 @@ each one printed as `SHOT <path>`. Scripts are a line per command (`open`, `key 
 `shot`, `state`, `assert-status …`); `--help` lists them. Keystrokes are resolved through the
 real key map and dispatched through the same entry point the toolbar uses, so no operating
 system input is synthesised and nothing competes with the desktop. `tools/ui/sync.bcs` does
-the same for the two-angle overlay sync.
+the same for the two-angle overlay sync, and `zoom.bcs`, `keyframes.bcs`, `loop.bcs` and
+`gif.bcs` for the timeline strip, the keyframe snap, looping and importing a GIF.
 
 A run is also silent: preview audio goes to a sink that consumes it at real time and discards
 it, so the whole playback path runs without anything coming out of the speakers. `--audio`

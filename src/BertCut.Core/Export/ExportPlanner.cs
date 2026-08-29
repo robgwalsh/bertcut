@@ -12,9 +12,19 @@ public enum ExportMode
 
     /// <summary>Every kept segment re-encoded, because a crop or overlay changes the pixels.</summary>
     Render,
+
+    /// <summary>
+    /// Rendered, then reduced to an animated GIF through a palette pass.
+    /// </summary>
+    /// <remarks>
+    /// Chosen by the extension on the file the user named, so it is one save dialog and no new
+    /// setting. It reuses the render path for the picture rather than building its own graph,
+    /// which is what makes a crop and an overlay come along for free.
+    /// </remarks>
+    Gif,
 }
 
-/// <summary>Why the lossless path was unavailable, for display in the export dialog.</summary>
+/// <summary>Why the lossless path was unavailable, for display in the status line.</summary>
 public enum LosslessBlocker
 {
     None,
@@ -23,6 +33,27 @@ public enum LosslessBlocker
     MultipleSources,
     CutsMissKeyframes,
     Disabled,
+}
+
+/// <summary>
+/// Why a GIF could not be written, answered before any work is done.
+/// </summary>
+/// <remarks>
+/// A GIF stores whole palettised frames with no motion compensation, so its size grows with
+/// duration far faster than a video's — measured on high-entropy content at 640 wide and 12 fps,
+/// thirty seconds is about 6 MB and a minute is worth nobody's time. Refusing up front and saying
+/// why is the honest version of a progress bar that runs for two minutes and produces something
+/// unusable.
+/// </remarks>
+public enum GifBlocker
+{
+    None,
+
+    /// <summary>Longer than <see cref="ExportSettings.GifMaxSeconds"/>.</summary>
+    TooLong,
+
+    /// <summary>An empty timeline.</summary>
+    NothingToWrite,
 }
 
 /// <summary>One ffmpeg process to run.</summary>
@@ -38,7 +69,8 @@ public sealed record ExportPlan(
     LosslessBlocker Blocker,
     IReadOnlyList<FfmpegStep> Steps,
     IReadOnlyList<string> TempFiles,
-    IReadOnlyList<long> KeyframeSnappedBoundaries)
+    IReadOnlyList<long> KeyframeSnappedBoundaries,
+    GifBlocker GifBlocker = GifBlocker.None)
 {
     public double TotalSeconds => Steps.Sum(s => s.DurationSeconds);
 }
@@ -64,6 +96,20 @@ public static class ExportPlanner
             throw new InvalidOperationException("Nothing to export: the timeline is empty.");
 
         var plan = RenderPlan.Build(project);
+
+        // A GIF is asked for by naming one, so the extension decides and there is no second
+        // dialog. It always renders: a palette pass reads pixels, so no copy path can serve it.
+        if (settings.WantsGif)
+        {
+            var gifBlocker = FindGifBlocker(project, settings);
+
+            return gifBlocker == GifBlocker.None
+                ? PlanRender(
+                    project, plan, settings, capabilities, indexOf, tempDirectory,
+                    LosslessBlocker.Disabled, forGif: true)
+                : new ExportPlan(ExportMode.Gif, LosslessBlocker.Disabled, [], [], [], gifBlocker);
+        }
+
         var blocker = FindLosslessBlocker(project, plan, settings, indexOf);
 
         return blocker == LosslessBlocker.None
@@ -171,6 +217,23 @@ public static class ExportPlanner
             SnappedBoundaries(plan, indexOf));
     }
 
+    /// <summary>
+    /// Whether a GIF can be written for this edit, and if not, why.
+    /// </summary>
+    /// <remarks>
+    /// Asked before any work, so a refusal costs nothing and can say what would have to change.
+    /// The only question is length: a GIF stores whole palettised frames with no motion
+    /// compensation, so its size grows with duration in a way a video's does not.
+    /// </remarks>
+    public static GifBlocker FindGifBlocker(Project project, ExportSettings settings)
+    {
+        if (project.Base.IsEmpty || project.DurationFrames <= 0) return GifBlocker.NothingToWrite;
+
+        var seconds = project.DurationFrames / project.Output.FrameRate.Approx;
+
+        return seconds > settings.GifMaxSeconds ? GifBlocker.TooLong : GifBlocker.None;
+    }
+
     private static ExportPlan PlanRender(
         Project project,
         IReadOnlyList<FlatSegment> plan,
@@ -178,7 +241,8 @@ public static class ExportPlanner
         EncoderCapabilities capabilities,
         Func<int, SourceIndex> indexOf,
         string temp,
-        LosslessBlocker blocker)
+        LosslessBlocker blocker,
+        bool forGif = false)
     {
         var encoder = capabilities.SelectVideoEncoder();
         var steps = new List<FfmpegStep>();
@@ -240,6 +304,35 @@ public static class ExportPlanner
             FfmpegArgs.ConcatSegments(listFile, videoFile),
             totalSeconds,
             videoFile));
+
+        // A GIF stops here and goes through a palette instead: the picture is the same rendered
+        // video every other path produces, which is what makes a crop and an overlay come along
+        // for free, and there is no audio step at all because the format has no track to put it in.
+        if (forGif)
+        {
+            var paletteFile = Path.Combine(temp, "palette.png");
+            tempFiles.Add(paletteFile);
+
+            // Scale down to fit, never up: enlarging a frame in a 256-colour palette adds bytes
+            // and no detail. Even, because an odd width is an odd height away from a broken scale.
+            var width = Math.Min(settings.GifMaxWidth, deliveredWidth);
+            width -= width % 2;
+
+            steps.Add(new FfmpegStep(
+                "Choosing the GIF's colours",
+                FfmpegArgs.GifPalette(videoFile, paletteFile, settings.GifFrameRate, width),
+                Math.Max(1, totalSeconds * 0.25),
+                paletteFile));
+
+            steps.Add(new FfmpegStep(
+                "Writing the GIF",
+                FfmpegArgs.GifEncode(
+                    videoFile, paletteFile, settings.OutputPath, settings.GifFrameRate, width),
+                Math.Max(1, totalSeconds * 0.5)));
+
+            return new ExportPlan(
+                ExportMode.Gif, blocker, steps, tempFiles, SnappedBoundaries(plan, indexOf));
+        }
 
         AppendAudioAndMux(project, plan, settings, indexOf, temp, steps, tempFiles, videoFile, totalSeconds);
 

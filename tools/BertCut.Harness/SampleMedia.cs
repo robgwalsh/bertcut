@@ -271,4 +271,74 @@ internal static class SampleMedia
         // The WAV was scaffolding; leaving it beside the clip would confuse a later 'open'.
         try { File.Delete(wav); } catch (IOException) { /* best effort */ }
     }
+
+    /// <summary>
+    /// A silent GIF, at a rate that is neither the project's nor a whole number.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The fixture for importing a GIF as a segment, and deliberately awkward on both counts a
+    /// GIF is awkward: it carries no audio, and its rate does not divide the timeline's. Twelve
+    /// frames a second in a 1/100 time base gives 12.5 as the average rate ffprobe reports, so a
+    /// clip of it lands on a fractional number of timeline frames and has to be floored — which
+    /// is the arithmetic that <c>ProjectInvariants</c> used to reject outright.
+    /// </para>
+    /// <para>
+    /// Two passes, because one is visibly worse: <c>palettegen</c> chooses 256 colours for the
+    /// whole clip and <c>paletteuse</c> maps to them, where letting the GIF encoder pick per
+    /// frame bands every gradient in the picture.
+    /// </para>
+    /// </remarks>
+    public static void WriteGif(FfmpegRuntime runtime, string path, int seconds)
+    {
+        if (Path.GetDirectoryName(path) is { Length: > 0 } directory)
+            Directory.CreateDirectory(directory);
+
+        var duration = seconds.ToString(CultureInfo.InvariantCulture);
+        var source = $"testsrc2=size=320x240:rate=15:duration={duration}";
+        var palette = Path.ChangeExtension(path, ".palette.png");
+
+        RunFfmpeg(runtime,
+        [
+            "-hide_banner", "-y", "-nostdin",
+            "-f", "lavfi", "-i", source,
+            "-vf", "fps=12,scale=320:-1:flags=lanczos,palettegen=stats_mode=diff",
+            palette,
+        ]);
+
+        RunFfmpeg(runtime,
+        [
+            "-hide_banner", "-y", "-nostdin",
+            "-f", "lavfi", "-i", source,
+            "-i", palette,
+            "-lavfi",
+            "fps=12,scale=320:-1:flags=lanczos[x];" +
+            "[x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
+            path,
+        ]);
+
+        try { File.Delete(palette); } catch (IOException) { /* best effort */ }
+    }
+
+    /// <summary>Runs ffmpeg and throws with its diagnostics when it fails.</summary>
+    private static void RunFfmpeg(FfmpegRuntime runtime, string[] arguments)
+    {
+        var start = new ProcessStartInfo(runtime.FfmpegPath)
+        {
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        foreach (var argument in arguments) start.ArgumentList.Add(argument);
+
+        using var process = Process.Start(start)
+            ?? throw new InvalidOperationException($"Could not start {runtime.FfmpegPath}.");
+
+        var errors = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"ffmpeg could not write the sample: {errors}");
+    }
 }

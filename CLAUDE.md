@@ -289,6 +289,56 @@ nothing against a document that has been renumbered. The two drags are the excep
 keep their own index in step with what they are rewriting, which is also why they are the
 only callers allowed to survive a change.
 
+**The strip zooms, by three routes into the same three intents.** `=`, `-` and `\` were bound to
+`ZoomIn`/`ZoomOut`/`ZoomToFit` from the first commit and listed on the Controls page, and nothing
+anywhere handled them — unlike the razor tool and `Ctrl+S`, which are absent deliberately and say
+so. Without it `XOf` mapped the whole recording across the width, so on an hour of footage a pixel
+was three seconds and a cut could be placed by keyboard but not by pointer. The wheel over the
+strip and the three buttons left of the transport go to those same intents, so there is one
+implementation and the buttons print whatever the keys have since been rebound to.
+
+- **Zooming holds an anchor frame at the same fraction of the strip.** The keys anchor on the
+  playhead; the wheel anchors on the frame under the pointer, which is the whole reason a wheel
+  gesture is worth having — getting closer to a cut is one motion instead of a zoom followed by
+  hunting for where it went. `ZoomBy(factor, anchor)` is the one path both take.
+- **The visible window is a position of its own, and that is a deliberate reversal.** It began
+  derived — centred on the playhead, recomputed in its setter, needing no scrollbar, no pan
+  gesture and no state to keep in step. Two costs sank it. A scrollbar cannot exist over a derived
+  window, because dragging the thumb has nowhere to write and the next repaint puts it back. And a
+  window centred on the playhead moves on *every frame of playback*, which threw away the waveform
+  cache — keyed on the window, and rightly — sixty times a second at any zoom above 1, to scroll
+  the picture by a pixel.
+- **So the window moves only when the playhead leaves it.** That is the whole of
+  `EditorViewModel.FollowPlayhead`, and it is what keeps the old promise: scrolling still happens
+  by moving the playhead, by whatever means it already moves — a key, the ruler, an audio sync.
+  What changed is that a playhead moving *inside* the window now moves nothing. Playback at zoom
+  pages once a screenful instead of sliding continuously, keeping an eighth of a screen behind the
+  direction of travel, and one rebuild a screenful is the cost the cache was written for.
+- **Only `XOf` and `FrameAt` changed.** Every placement and both hit tests already went through
+  that pair, so segment fills, overlay bands, the playhead and every drag followed for free. The
+  pair being each other's exact inverse is the thing most likely to break and the thing
+  `tools/ui/zoom.bcs` spends most of its assertions on — a scrub is the one gesture that goes
+  through both.
+- **The scrollbar is hidden, not collapsed, when there is nothing to scroll.** Collapsing it would
+  hand its ten pixels to the preview pane, and the pane's height is what `ApplyPreviewSize` divides
+  to choose a composite size — so zooming the timeline could rebuild every cached decoder and its
+  scaler context. It would also move the strip out from under a pointer in the middle of turning a
+  wheel on it. Ten pixels of nothing is much the cheaper of the two.
+- **`SyncTimelineScroll` reads `Scroll`, never `ValueChanged`.** `Scroll` is raised only by a user
+  gesture; `ValueChanged` would be raised by this method itself, on every frame of playback, and
+  the loop would be silent rather than obvious.
+
+**Keyframe marks appear in the ruler when the window is short enough to aim at one.** A cut that
+lands on a keyframe lets the whole export be stream-copied rather than re-encoded, and that was
+invisible until an export had already started and mentioned it in passing. They are drawn only
+below `MaxTickWindowFrames`: at zoom 1 an hour of screen recording holds several thousand and the
+lane would be a solid bar, which is noise wearing the shape of information. They are cached on the
+same key as the waveform, so the repaint the playhead causes every frame rebuilds neither.
+
+**No ruler text.** `OnRender` runs on every playhead move, which during playback is every frame,
+and `FormattedText` per tick per frame is exactly the cost the thumbnails were removed for. Where
+the window sits is said once, in the status line, when the zoom changes.
+
 ## Placing an overlay
 
 Two questions, deliberately separated, because one keypress used to answer both silently.
@@ -330,6 +380,91 @@ commit either: a crop *is* the range they named, but an overlay only borrowed th
 
 `IsPlacing` asks for `Crop or Overlay` by name rather than "not Normal" — `RectEditor` watches
 it, and a box appearing behind the card would answer a question nobody had asked yet.
+
+## Exporting
+
+One button and one save dialog. What comes out is decided by the name the user typed and by what
+the edit does to the pixels — never by a settings page, because a settings page is where an
+editor stops being the fast way to do three things.
+
+- **The out point is what decides whether the video can be copied.** `FindLosslessBlocker` checks
+  every flat segment's source start; after a ripple delete of `[in, out)` the kept segments start
+  at source frame 0 and at `out`, and frame 0 is always a keyframe. So `out` is the only boundary
+  that can fail, and `Shift+K` (`SnapMarksToKeyframes`) walks it forward to the next one. Forward
+  and never to the nearest: snapping backwards would keep footage the user asked to remove, and
+  quietly keeping frames is worse than quietly losing a few they can see are gone.
+- **It is said when it can still be acted on.** The status line after a ripple delete names
+  whether the edit exports by copying or will re-encode, and names `Shift+K` when that is the
+  reason. `SnappedBoundaries` had computed this from the beginning and nothing read it; the
+  blocker was reported from inside a running export, which is after the only moment a user could
+  do anything with it.
+- **`Shift+K` searches in timeline frames rather than converting into source space and back.**
+  The inverse mapping is the part that would have to know about rate conversion and segment
+  boundaries, and getting it a frame wrong reads as the feature not working. A GOP is a few
+  hundred frames, so the scan is bounded, and it asks the export's own question.
+
+**A GIF is asked for by naming one.** The save dialog offers `*.mp4` and `*.gif`, the extension
+picks the mode, and there is no second dialog and no new setting.
+
+- **It reuses the render path** and appends two steps rather than building a graph of its own,
+  which is what makes a crop and an overlay come along for free. The extra pass is accepted: at
+  thirty seconds it is cheap, and sharing the geometry is worth more than saving it.
+- **Two passes, because one is visibly worse.** `palettegen` chooses 256 colours over the whole
+  clip and `paletteuse` maps to them; letting the GIF encoder pick per frame bands every gradient.
+  `diff_mode=rectangle` stores only the changed rectangle per frame, which on a screen recording
+  is most of the file size, and the dither is ordered rather than error-diffused — error diffusion
+  re-dithers static pixels differently every frame, so a still background shimmers and, worse,
+  defeats the rectangle optimisation above it.
+- **Length is refused up front, not discovered.** A GIF stores whole palettised frames with no
+  motion compensation, so size grows with duration far faster than a video's — measured on
+  high-entropy content at 640 wide and 12 fps, ten seconds is 1.4 MB and thirty is 6.3 MB.
+  `GifBlocker` is checked before any work and named in the status line, because a progress bar
+  that runs for two minutes and produces something unusable is worse than a refusal.
+- **Never scaled up.** Enlarging a frame inside a 256-colour palette adds bytes and no detail, so
+  `GifMaxWidth` is a ceiling and a narrower delivered size wins.
+
+**A GIF imports as a segment too**, and needed nothing but the file dialog filters — it probes
+through `MediaProber` unchanged. It is the awkward source on both counts: no audio, and a rate
+(12.5 fps for one written at 12 in a 1/100 time base) that is neither whole nor the project's. It
+has one keyframe, so a backward seek decodes from the start; that needs no special case, because
+`VideoDecoder` already takes whichever of seek-or-decode-forward is fewer frames.
+
+**Export is cancellable, by the button that started it.** `ExportRunner` always honoured a token —
+it asks ffmpeg to stop by writing `q` and gives it a grace period — and nothing ever passed one.
+The Save as button becomes a stop button while one is running, because there is only ever one
+export and it is the button the user just pressed; a separate control would be dead the rest of
+the time. `Esc` is deliberately not bound to it: it means "clear the marks" everywhere else, and a
+key whose meaning depends on invisible state is one you can only learn by tripping over it.
+
+**An encoder that fails to initialise invalidates the capability cache.** A remembered NVENC that
+now will not start means the machine changed under the answer — a card pulled, a driver rolled
+back — so the memo is thrown away and the next launch re-probes.
+
+## Saving one frame
+
+`F` writes the frame under the playhead out as a PNG, through `Png.Save`, which the tests and
+`dump-preview` already used.
+
+**It renders again at the delivered size rather than saving what is on screen.** The pump
+composites at the size the preview is *displayed* at, which is the delivered size over an integer
+divisor of up to four — so saving the buffer on screen would hand back a quarter-resolution still
+of a 4K recording and say nothing about it. A throwaway `PreviewEngine` on a background thread is
+how `PreviewEngineTests` already drives one with no window, and it leaves the pump's decoders,
+ring and read-ahead untouched, so pressing `F` during playback costs the picture nothing.
+
+## Looping the marked range
+
+`Shift+Space` rounds playback on the marked range instead of running past it — mark roughly, watch
+the seam, nudge a mark, watch again without stopping.
+
+- **The range is read live rather than captured when the loop starts**, so moving a mark changes
+  the loop on the next pass. That is the whole gesture.
+- **A wrap re-opens the audio device.** At 1x forward the device is the master clock, so moving
+  the playhead alone would be undone by the next tick reading the device's position. It is the
+  same thing an undo during playback already does. There is an audible seam at the wrap, which is
+  honest and is the same seam a cut boundary has.
+- The wrap is checked **before** the end-of-timeline case, or a loop ending on the last frame
+  would stop there once instead of rounding.
 
 ## Never launch the GUI
 
@@ -410,6 +545,9 @@ sample-cameras <a> <b> [sec]  two clips of one event, through two rooms and two 
                             make and the one the confidence gate used to refuse.
 sample-angles <path> [sec]  one clip holding the same event twice: an angle, then the same
                             event again quieter and noisier — the audio-sync fixture
+sample-gif <path> [sec]     a silent GIF at 12.5 fps — no audio and a rate that is neither the
+                            project's nor a whole number, which is the shape that exposed the
+                            mixed-rate invariant
 open|import|append <path>
 key <gesture>               through the live key map:  key I  ·  key Ctrl+Z  ·  key >
 intent <EditorIntent>       straight to the window's dispatch point
@@ -427,6 +565,14 @@ scrub <frame>               click the ruler above the track — seeks, and desel
 drag-playhead <from> <to>   press on the ruler and drag, so the playhead outruns the decoder
                             the way it does under a hand. Not the same test as a run of
                             scrubs: the pointer never lifts.
+wheel <frame> [notches]     turn the wheel over the strip at that frame, which zooms about it.
+                            The frame is the point: the anchoring is the behaviour, and a
+                            command that only said how far to turn would leave it undriven.
+                            One notch is one press of `=`. Negative zooms out.
+scroll-timeline <frame>     move the strip's window to begin there, which is what the
+                            scrollbar's thumb writes. The thumb's own drag is a stock WPF
+                            Track and has nothing of ours in it, so this enters where its
+                            Scroll handler does.
 draw-rect <x0> <y0> <x1> <y1> [shift]
                                     drag a new crop or overlay box out on the preview, in
                                     canvas pixels — the only gesture that gives a box a shape
@@ -443,7 +589,8 @@ dump-preview <name>.png     the composited video frame alone, no interface
 state                       one JSON line: playhead, duration, marks, mode, hasMedia, crops,
                             overlays, segments, selectedSegment, overlaySourceStart,
                             selectedOverlay, overlayStart, overlayEnd, overlayLength, crop,
-                            overlaySrc, delivered, muted, canUndo, previewSize, status
+                            overlaySrc, delivered, muted, canUndo, previewSize, looping, zoom,
+                            visibleStart, visibleLength, status
 assert-status <substring> | assert-timecode <text> | assert-frame <n>
 assert-mode Normal|Crop|Overlay|OverlaySource   the card is a mode, and this is what says
                                                 a choice has been taken
@@ -459,7 +606,11 @@ assert-overlay-src <WxH+X+Y>|none     the region the clip cuts out of its source
 assert-delivered <WxH>                the size the finished picture comes out at
 assert-overlay-selected [index] | assert-no-overlay-selected | assert-overlays <n>
 assert-segment-selected [index] | assert-no-segment-selected | assert-segments <n>
-assert-marks <in> <out> | assert-no-marks    an overlay of the marked range borrows the marks
+assert-zoom <n>                       how far the strip is zoomed, 1 being all of it
+assert-visible-range <start> <len>    the span the strip is showing. Zoom alone does not say
+                                      it: the window is anchored on the playhead and clamped
+                                      at both ends
+assert-marks <in> <out> | assert-no-marks| assert-no-marks    an overlay of the marked range borrows the marks
                                              without spending them, and nothing else shows it
 assert-muted | assert-unmuted
 assert-has-media | assert-no-media | assert-unlocked <path>   (exclusive open, so it
@@ -517,13 +668,20 @@ screen is the playhead's — not "the pump is idle".
 
 ## State
 
-The app keeps sessions, key bindings, its thumbnail cache and its audio envelopes under
-`%USERPROFILE%\.bertcut`,
-autosaves every 750 ms, and restores by content key — so without isolation a test run would be
+The app keeps sessions, key bindings, audio envelopes, timestamp indices and the ffmpeg
+capability probe under `%USERPROFILE%\.bertcut`, autosaves every 750 ms, and restores by content
+key — so without isolation a test run would be
 restored into the user's editor next time they opened the same file. `BERTCUT_STATE_DIR`
 relocates that root (`BertCut.Core.Session.AppPaths`); the harness points it at a scratch
 directory per run and deletes it afterwards. `--keep-state` keeps it, which is how session
 restore gets tested across two runs.
+
+**`dotnet test` isolates itself the same way**, through a module initializer
+(`TestStateRoot`) rather than a fixture, because several test classes locate ffmpeg in their
+constructor and it has to be in place before the first one is built. This became necessary when
+the caches below were added: probing a file now *writes* one as an ordinary part of its job, so
+every test that probed a temporary clip was leaving an index behind in the real profile for a
+file that had already been deleted.
 
 **It is the profile rather than `%LOCALAPPDATA%\BertCut` because that is now the Velopack install
 directory, and the installer deletes it** on install and on every update. State kept there would
@@ -535,6 +693,42 @@ FFmpeg discovery deliberately does *not* follow that variable — it is an insta
 state. It probes `%USERPROFILE%\.bertcut\ffmpeg` ahead of the old `%LOCALAPPDATA%` path for the
 same reason as above: a copy installed into the install directory would not survive an update.
 
+### The caches
+
+Everything under `cache/` is keyed by **content key**, so it survives a rename and a move and is
+never orphaned by an edit. Three things live there, and the first rule is about all of them.
+
+**They share a directory per content key, so nothing may delete one wholesale.** `peaks.bin` and
+`index.bin` sit in the same `cache/<contentKey>/` a filmstrip used to. `FilmstripCache.Trim` was a
+recursive directory delete and ran at every startup with a zero budget — which made every
+directory over budget — so the audio envelope was deleted on every launch and rebuilt by a full
+audio decode on the first open after each one. Nothing pointed at the cause, because the cost
+landed on the next thing the user did rather than where it was spent. `PurgeThumbnails` removes
+files and only then an emptied directory; `AudioPeaksCache.Trim` evicts by last access against a
+byte budget, which is the eviction it never had.
+
+- **`peaks.bin`** — the 100 Hz min/max envelope, built in the background per source, feeding the
+  waveform lane and the coarse correlation pass. About 3 MB an hour.
+- **`index.bin`** — `SourceIndexCache`. The timestamp and keyframe table, which is three ffprobe
+  launches to build, the last of which walks every packet in the container. It was rebuilt on
+  every open, every append and every session restore of a file already indexed, and
+  `SourceIndex`'s own remarks had claimed it was cached on disk since before anything wrote it.
+  About 864 KB an hour at 30 fps.
+- **`ffmpeg-capabilities.json`** — `FfmpegCapabilityCache`. Fingerprinted by the exe's path,
+  length and write time, so a hit launches **nothing at all**, not even `-version`, whose banner is
+  stored rather than re-read. What it removes is five to eight ffmpeg child processes running
+  synchronously on the UI thread *before `MainWindow` is constructed*, each mapping ~139 MB of
+  shared libraries: measured at 612 ms on this machine with a warm file cache, and worse cold. An
+  update changes the fingerprint; an encoder that fails to initialise invalidates the file.
+
+Both new caches count their process launches (`FfmpegRuntime.ProbeLaunches`,
+`MediaProber.ProbeLaunches`) so the rule can be pinned by counting rather than by timing, which is
+the trade `VideoDecoder.SeekCount` already makes: the cost is real, but a stopwatch in a test
+fails on a busy machine.
+
+Session restore probes its sources **together** rather than one at a time. A restore sits between
+launching and being able to edit, and serially a session holding three sources waited out three
+probes end to end.
 ## Measured behaviour of the offscreen window
 
 Worth knowing, because each of these was checked rather than assumed:

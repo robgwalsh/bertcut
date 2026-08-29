@@ -289,6 +289,56 @@ public static class FfmpegArgs
     };
 
     /// <summary>
+    /// Chooses the 256 colours a GIF will be drawn from, over the whole clip.
+    /// </summary>
+    /// <remarks>
+    /// Two passes rather than one because letting the GIF encoder pick a palette per frame bands
+    /// every gradient in the picture and makes flat colour crawl. <c>stats_mode=diff</c> weights
+    /// the choice towards the pixels that actually change, which is what a screen recording is
+    /// almost entirely made of — a mostly-static window where a menu opens.
+    /// </remarks>
+    public static List<string> GifPalette(string videoPath, string palettePath, int fps, int width)
+    {
+        List<string> args = [.. Preamble];
+        args.AddRange(["-i", videoPath]);
+        args.AddRange(["-vf", $"fps={fps},scale={width}:-2:flags=lanczos,palettegen=stats_mode=diff"]);
+        args.AddRange(ProgressFlags);
+        args.Add(palettePath);
+
+        return args;
+    }
+
+    /// <summary>
+    /// Draws the GIF against the palette chosen for it.
+    /// </summary>
+    /// <remarks>
+    /// <c>diff_mode=rectangle</c> lets each frame store only the rectangle that changed, which on
+    /// a screen recording is most of the file size. The Bayer dither is ordered rather than
+    /// error-diffused: error diffusion re-dithers static pixels differently every frame, so a
+    /// still background shimmers and, worse, defeats the rectangle optimisation above it.
+    /// </remarks>
+    public static List<string> GifEncode(
+        string videoPath, string palettePath, string outputPath, int fps, int width)
+    {
+        List<string> args = [.. Preamble];
+        args.AddRange(["-i", videoPath]);
+        args.AddRange(["-i", palettePath]);
+        args.AddRange([
+            "-lavfi",
+            $"fps={fps},scale={width}:-2:flags=lanczos[x];" +
+            "[x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
+        ]);
+
+        // A GIF loops forever by default, which is what everyone wants from one, and it carries
+        // no audio at all — so there is no track to map and nothing to mux afterwards.
+        args.AddRange(["-loop", "0"]);
+        args.AddRange(ProgressFlags);
+        args.Add(outputPath);
+
+        return args;
+    }
+
+    /// <summary>
     /// Formats a time for ffmpeg with microsecond resolution and an invariant decimal
     /// point — a comma from a European locale would be parsed as an argument separator.
     /// </summary>

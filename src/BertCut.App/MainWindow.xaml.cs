@@ -10,6 +10,7 @@ using System.Windows.Media.Imaging;
 using BertCut.Core.Export;
 using BertCut.Core.Input;
 using BertCut.Core.Session;
+using BertCut.Core.Timeline;
 using BertCut.Media;
 using BertCut.Media.Audio;
 using BertCut.Media.Decode;
@@ -21,6 +22,9 @@ public partial class MainWindow : Window
 {
     private readonly FfmpegRuntime _runtime;
     private readonly EditorViewModel _model;
+
+    /// <summary>The export in flight, or null. Also the re-entrancy guard: one at a time.</summary>
+    private CancellationTokenSource? _export;
     private WriteableBitmap? _surface;
 
     /// <summary>
@@ -136,6 +140,7 @@ public partial class MainWindow : Window
             case EditorIntent.ChooseOverlayFile: ChooseOverlayFile(); break;
             case EditorIntent.AppendSource: AppendFile(); break;
             case EditorIntent.Export: _ = ExportAsync(); break;
+            case EditorIntent.SaveFrame: _ = SaveFrameAsync(); break;
             case EditorIntent.ToggleSettings: ToggleSettings(); break;
             default: _model.Dispatch(intent); break;
         }
@@ -176,7 +181,7 @@ public partial class MainWindow : Window
         var dialog = new OpenFileDialog
         {
             Title = "Open a video",
-            Filter = "Video files|*.mp4;*.mkv;*.mov;*.avi;*.webm;*.m4v|All files|*.*",
+            Filter = "Video files|*.mp4;*.mkv;*.mov;*.avi;*.webm;*.m4v;*.gif|All files|*.*",
         };
 
         if (dialog.ShowDialog(this) == true) Open(dialog.FileName);
@@ -201,7 +206,7 @@ public partial class MainWindow : Window
         var dialog = new OpenFileDialog
         {
             Title = "Import a video to overlay",
-            Filter = "Video files|*.mp4;*.mkv;*.mov;*.avi;*.webm;*.m4v|All files|*.*",
+            Filter = "Video files|*.mp4;*.mkv;*.mov;*.avi;*.webm;*.m4v;*.gif|All files|*.*",
         };
 
         if (dialog.ShowDialog(this) == true) _ = _model.ImportAsync(dialog.FileName);
@@ -213,7 +218,7 @@ public partial class MainWindow : Window
         var dialog = new OpenFileDialog
         {
             Title = "Choose a video to overlay",
-            Filter = "Video files|*.mp4;*.mkv;*.mov;*.avi;*.webm;*.m4v|All files|*.*",
+            Filter = "Video files|*.mp4;*.mkv;*.mov;*.avi;*.webm;*.m4v;*.gif|All files|*.*",
         };
 
         // Backing out of the picker leaves the card up rather than abandoning the overlay:
@@ -235,7 +240,7 @@ public partial class MainWindow : Window
         var dialog = new OpenFileDialog
         {
             Title = _model.HasMedia ? "Add a video to the end of the timeline" : "Open a video",
-            Filter = "Video files|*.mp4;*.mkv;*.mov;*.avi;*.webm;*.m4v|All files|*.*",
+            Filter = "Video files|*.mp4;*.mkv;*.mov;*.avi;*.webm;*.m4v;*.gif|All files|*.*",
         };
 
         if (dialog.ShowDialog(this) != true) return;
@@ -594,7 +599,9 @@ public partial class MainWindow : Window
         // The transport row is not the toolbar, but its buttons are the same thing wearing
         // a smaller icon, and they are the ones most in need of a tooltip: at 10 pixels a
         // glyph names itself less well than it does at 17.
-        foreach (var button in Buttons(Toolbar).Concat(Buttons(TransportControls)))
+        foreach (var button in Buttons(Toolbar)
+                     .Concat(Buttons(ZoomControls))
+                     .Concat(Buttons(TransportControls)))
             button.ToolTip = new ShortcutTip(
                 AutomationProperties.GetName(button),
                 button.Tag is EditorIntent intent ? Gesture(intent) : "",
@@ -613,8 +620,100 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Writes the frame under the playhead out as a PNG.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Rendered again at the delivered size rather than saved from the screen.</b> The pump
+    /// composites at the size the preview is <i>displayed</i> at, which is the delivered size
+    /// divided by up to four — so saving what is on screen would hand back a quarter-resolution
+    /// still of a 4K recording and say nothing about it. A still that is secretly smaller than
+    /// the footage it came from is a trap, and it would be found much later than it was made.
+    /// </para>
+    /// <para>
+    /// A throwaway engine on a background thread, which is how <c>PreviewEngineTests</c> drives
+    /// one with no window at all. The pump keeps its decoders, its ring and its read-ahead
+    /// untouched, so pressing F during playback costs the picture nothing.
+    /// </para>
+    /// </remarks>
+    private async Task SaveFrameAsync()
+    {
+        if (!_model.HasMedia)
+        {
+            StatusLabel.Text = "Nothing to save.";
+            return;
+        }
+
+        var first = _model.Project.Sources[0];
+        var frame = _model.Playhead;
+
+        var dialog = new SaveFileDialog
+        {
+            Title = "Save this frame",
+            Filter = "PNG image|*.png",
+            FileName = $"{Path.GetFileNameWithoutExtension(first.Path)}-{frame}.png",
+            InitialDirectory = Path.GetDirectoryName(first.Path),
+        };
+
+        if (dialog.ShowDialog(this) != true)
+        {
+            Keyboard.Focus(this);
+            return;
+        }
+
+        Keyboard.Focus(this);
+
+        var project = _model.Project;
+        var (width, height) = project.DeliveredSize;
+        var output = project.Output with { Width = width, Height = height };
+        var path = dialog.FileName;
+
+        StatusLabel.Text = "Saving the frame...";
+
+        try
+        {
+            await Task.Run(() =>
+            {
+                using var engine = new PreviewEngine(
+                    output, _model.IndexOf, id => project.RequireSource(id).Path);
+
+                if (!engine.Render(new TimelineResolver(project), frame))
+                    throw new InvalidOperationException("that frame could not be decoded.");
+
+                Png.Save(engine.Canvas, path);
+            });
+
+            StatusLabel.Text = $"Saved {width}x{height} frame to {path}";
+        }
+        catch (Exception e) when (e is InvalidOperationException or IOException
+                                      or UnauthorizedAccessException)
+        {
+            StatusLabel.Text = $"Could not save the frame: {e.Message.Split('\n')[0]}";
+        }
+    }
+
+    /// <summary>
+    /// Writes the edit out, or stops the one already running.
+    /// </summary>
+    /// <remarks>
+    /// One button for both, because there is only ever one export and it is the button the user
+    /// just pressed — a separate stop control would be dead the whole time nothing is exporting.
+    /// <c>Esc</c> is deliberately not bound to this: it means "clear the marks" everywhere else,
+    /// and a key whose meaning depends on invisible state is one you can only learn by tripping
+    /// over it.
+    /// </remarks>
     private async Task ExportAsync()
     {
+        // The second press is the cancel. ExportRunner asks ffmpeg to stop by writing "q" and
+        // gives it a grace period, so a cancelled export leaves no half-muxed file behind.
+        if (_export is not null)
+        {
+            StatusLabel.Text = "Stopping the export...";
+            await _export.CancelAsync();
+            return;
+        }
+
         if (!_model.HasMedia)
         {
             StatusLabel.Text = "Nothing to export.";
@@ -625,7 +724,7 @@ public partial class MainWindow : Window
         var dialog = new SaveFileDialog
         {
             Title = "Save as",
-            Filter = "MP4 video|*.mp4",
+            Filter = "MP4 video|*.mp4|Animated GIF|*.gif",
             FileName = Path.GetFileNameWithoutExtension(first.Path) + "-edit.mp4",
             InitialDirectory = Path.GetDirectoryName(first.Path),
         };
@@ -642,6 +741,10 @@ public partial class MainWindow : Window
         _model.FlushSession();
 
         var temp = Path.Combine(Path.GetTempPath(), "BertCut", Guid.NewGuid().ToString("N"));
+        var cancellation = new CancellationTokenSource();
+
+        _export = cancellation;
+        SetExportButtonStops(true);
 
         try
         {
@@ -652,29 +755,78 @@ public partial class MainWindow : Window
                 _model.IndexOf,
                 temp);
 
-            var mode = plan.Mode == ExportMode.LosslessVideo
-                ? "lossless"
-                : $"re-encoding ({Describe(plan.Blocker)})";
+            // Answered before any work: a GIF of an hour-long edit is a refusal, not a wait.
+            if (plan.GifBlocker is not GifBlocker.None)
+            {
+                StatusLabel.Text = $"Cannot write a GIF: {Describe(plan.GifBlocker)}.";
+                return;
+            }
+
+            var mode = plan.Mode switch
+            {
+                ExportMode.LosslessVideo => "lossless",
+                ExportMode.Gif => "GIF",
+                _ => $"re-encoding ({Describe(plan.Blocker)})",
+            };
 
             StatusLabel.Text = $"Exporting — {mode}...";
 
             var progress = new Progress<ExportStatus>(s =>
-                StatusLabel.Text = $"Exporting — {mode} — {s.Fraction:P0} — {s.Description}");
+                StatusLabel.Text = $"Exporting — {mode} — {s.Fraction:P0} — {s.Description} — Save as stops it");
 
-            await new ExportRunner(_runtime).RunAsync(plan, temp, progress);
+            await new ExportRunner(_runtime).RunAsync(plan, temp, progress, cancellation.Token);
 
             StatusLabel.Text = $"Exported to {dialog.FileName}";
         }
+        catch (OperationCanceledException)
+        {
+            StatusLabel.Text = "Export cancelled.";
+        }
         catch (Exception e) when (e is FfmpegException or InvalidOperationException or IOException)
         {
-            StatusLabel.Text = $"Export failed: {e.Message.Split('\n')[0]}";
+            // An encoder that was probed as working and now will not initialise means the machine
+            // changed underneath the remembered answer — a card pulled, a driver rolled back. The
+            // memo is the thing that is wrong, so throw it away and let the next launch re-probe.
+            if (e is FfmpegException && LooksLikeAnEncoderFailure(e.Message))
+            {
+                FfmpegCapabilityCache.Invalidate();
+                StatusLabel.Text =
+                    $"Export failed: {e.Message.Split('\n')[0]} — restart to re-detect your encoders.";
+            }
+            else
+            {
+                StatusLabel.Text = $"Export failed: {e.Message.Split('\n')[0]}";
+            }
         }
         finally
         {
+            _export = null;
+            cancellation.Dispose();
+            SetExportButtonStops(false);
+
             try { if (Directory.Exists(temp)) Directory.Delete(temp, recursive: true); }
             catch (IOException) { /* best effort */ }
         }
     }
+
+    /// <summary>Swaps the Save as button between writing and stopping.</summary>
+    private void SetExportButtonStops(bool stopping)
+    {
+        ExportButton.Content = TryFindResource(stopping ? "Icon.Stop" : "Icon.Save");
+
+        AutomationProperties.SetName(ExportButton, stopping ? "Stop the export" : "Save as");
+    }
+
+    /// <summary>
+    /// Whether an ffmpeg failure is the encoder refusing to start rather than the edit being wrong.
+    /// </summary>
+    private static bool LooksLikeAnEncoderFailure(string message) =>
+        message.Contains("nvcuda", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("Cannot load", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("Cannot init", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("OpenEncodeSessionEx", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("No capable devices", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("Error initializing output stream", StringComparison.OrdinalIgnoreCase);
 
     private static string Describe(LosslessBlocker blocker) => blocker switch
     {
@@ -683,6 +835,14 @@ public partial class MainWindow : Window
         LosslessBlocker.MultipleSources => "more than one source",
         LosslessBlocker.CutsMissKeyframes => "a cut resumes mid-GOP",
         LosslessBlocker.Disabled => "exact cuts requested",
+        _ => "",
+    };
+
+    private static string Describe(GifBlocker blocker) => blocker switch
+    {
+        GifBlocker.TooLong =>
+            $"the edit is longer than the {ExportSettings.DefaultGifMaxSeconds} seconds a GIF is good for",
+        GifBlocker.NothingToWrite => "there is nothing on the timeline",
         _ => "",
     };
 
@@ -805,7 +965,53 @@ public partial class MainWindow : Window
         // CanvasSize, not Project: entering crop mode takes the existing crop off the preview,
         // which changes the shape being composited without changing the document.
         if (e.PropertyName is nameof(EditorViewModel.CanvasSize)) ApplyPreviewSize();
+
+        SyncTimelineScroll();
     }
+
+    /// <summary>
+    /// Points the scrollbar at the window the strip is showing.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Assigned unconditionally rather than watched for on a property name, like the transport's
+    /// visibilities above and for the same reason: a dependency property set to the value it
+    /// already holds invalidates nothing, and the three numbers here depend on the zoom, the
+    /// duration and the scroll position together — three names to watch instead of none.
+    /// </para>
+    /// <para>
+    /// There is no loop back into the model, because this reads <c>Scroll</c> — raised only by a
+    /// user gesture — and not <c>ValueChanged</c>, which this method would raise itself on every
+    /// frame of playback.
+    /// </para>
+    /// </remarks>
+    private void SyncTimelineScroll()
+    {
+        var zoomed = _model.IsZoomed;
+
+        // Hidden, not Collapsed: the strip must not move when the zoom changes. See the comment
+        // on the row in MainWindow.xaml.
+        TimelineScroll.Visibility = zoomed ? Visibility.Visible : Visibility.Hidden;
+        if (!zoomed) return;
+
+        TimelineScroll.Minimum = 0;
+        TimelineScroll.Maximum = _model.MaxVisibleStart;
+
+        // What the thumb is: the fraction of the recording on screen. Track sizes it against
+        // Maximum - Minimum + ViewportSize, so this is the length in frames and not a ratio.
+        TimelineScroll.ViewportSize = _model.VisibleLength;
+
+        // A page is a screenful less the margin FollowPlayhead keeps, so clicking the groove
+        // lands where paging with the playhead would.
+        TimelineScroll.LargeChange = Math.Max(1, _model.VisibleLength - (_model.VisibleLength / 8));
+        TimelineScroll.SmallChange = Math.Max(1, _model.VisibleLength / 16);
+
+        TimelineScroll.Value = _model.VisibleStart;
+    }
+
+    /// <summary>The one gesture that moves the strip's window without moving the playhead.</summary>
+    private void OnTimelineScroll(object sender, System.Windows.Controls.Primitives.ScrollEventArgs e) =>
+        _model.ScrollTo((long)Math.Round(e.NewValue));
 
     /// <summary>
     /// Points the mute button at whichever glyph and wording matches the current state.

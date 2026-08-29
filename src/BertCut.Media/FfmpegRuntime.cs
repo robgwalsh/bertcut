@@ -71,6 +71,13 @@ public sealed partial class FfmpegRuntime
             var probe = Path.Combine(candidate, "ffprobe.exe");
             if (!File.Exists(exe) || !File.Exists(probe)) continue;
 
+            // The whole of the work below was measured and written down last time this exact
+            // binary was seen. A hit launches nothing — not even -version, whose banner is
+            // stored rather than re-read — which is what takes ffmpeg off the path between the
+            // process starting and the window existing.
+            if (FfmpegCapabilityCache.Load(exe) is { } remembered)
+                return new FfmpegRuntime(candidate, remembered.Version, remembered.Capabilities);
+
             var banner = TryRun(exe, ["-hide_banner", "-version"]);
             if (banner is null) continue;
 
@@ -87,8 +94,11 @@ public sealed partial class FfmpegRuntime
             encoders.ExceptWith(HardwareH264Encoders.Where(n => !hardware.WorkingEncoders.Contains(n)));
 
             var version = banner.Split('\n')[0].Trim();
-            return new FfmpegRuntime(
-                candidate, version, new EncoderCapabilities(encoders, filters, hardware.CudaDecode));
+            var capabilities = new EncoderCapabilities(encoders, filters, hardware.CudaDecode);
+
+            FfmpegCapabilityCache.Save(exe, version, capabilities);
+
+            return new FfmpegRuntime(candidate, version, capabilities);
         }
 
         throw new FileNotFoundException(
@@ -179,9 +189,20 @@ public sealed partial class FfmpegRuntime
 
         return names;
     }
+    /// <summary>Child processes this type has launched, ever.</summary>
+    /// <remarks>
+    /// The cost the capability cache removes is real — five to eight process launches, each
+    /// mapping ~139 MB of shared libraries and self-measured at 150-300 ms — but timing it in a
+    /// test fails on a busy machine. Counting launches pins the rule instead, which is the trade
+    /// <c>VideoDecoder.SeekCount</c> already makes for seeks.
+    /// </remarks>
+    internal static int ProbeLaunches;
+
 
     private static string? TryRun(string exe, string[] args)
     {
+        Interlocked.Increment(ref ProbeLaunches);
+
         try
         {
             var psi = new ProcessStartInfo(exe)
@@ -286,6 +307,8 @@ public sealed partial class FfmpegRuntime
     /// <summary>Runs ffmpeg and reports whether it exited cleanly, discarding its output.</summary>
     private static bool RunSucceeds(string exe, string[] args)
     {
+        Interlocked.Increment(ref ProbeLaunches);
+
         try
         {
             var psi = new ProcessStartInfo(exe)

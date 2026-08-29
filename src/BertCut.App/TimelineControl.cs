@@ -61,6 +61,9 @@ public sealed class TimelineControl : FrameworkElement
     private static readonly Brush SegmentSelected = Frozen(Color.FromRgb(0x50, 0x5E, 0x70));
     private static readonly Pen SegmentSelectedPen = FrozenPen(Color.FromRgb(0xD6, 0xE1, 0xEF), 1);
     private static readonly Brush RulerBrush = Frozen(Color.FromRgb(0x26, 0x2B, 0x33));
+
+    /// <summary>Keyframe marks in the ruler: visible against it, and quieter than the playhead.</summary>
+    private static readonly Brush KeyframeBrush = Frozen(Color.FromRgb(0x4C, 0x5A, 0x6B));
     private static readonly Brush SelectionBrush = Frozen(Color.FromArgb(0x55, 0x4F, 0x9C, 0xF5));
     private static readonly Brush CropBrush = Frozen(Color.FromArgb(0xAA, 0xF2, 0xA1, 0x4C));
     private static readonly Brush OverlayBrush = Frozen(Color.FromArgb(0xAA, 0x6D, 0xD4, 0x8B));
@@ -89,6 +92,16 @@ public sealed class TimelineControl : FrameworkElement
     /// that reason: a strip you can drag along has to look like one.
     /// </remarks>
     private const double TrackTop = 16;
+
+    /// <summary>
+    /// The longest visible window that still gets keyframe marks.
+    /// </summary>
+    /// <remarks>
+    /// A screen recorder writes one every 250 frames or so, so 2000 frames is about eight marks
+    /// across the strip — enough to aim at. Much past this they merge into a bar, and the scan
+    /// that finds them stops being free.
+    /// </remarks>
+    private const long MaxTickWindowFrames = 2000;
 
     /// <summary>The crop band along the top of the track.</summary>
     private const double CropBandHeight = 5;
@@ -150,6 +163,13 @@ public sealed class TimelineControl : FrameworkElement
 
     private Geometry? _waveform;
     private double _waveformWidth = -1;
+    private long _waveformStart = -1;
+    private long _waveformLength = -1;
+
+    private Geometry? _ticks;
+    private double _ticksWidth = -1;
+    private long _ticksStart = -1;
+    private long _ticksLength = -1;
 
     public TimelineControl()
     {
@@ -205,6 +225,12 @@ public sealed class TimelineControl : FrameworkElement
         var waveTop = height - 12 - WaveHeight;
 
         dc.DrawRectangle(RulerBrush, null, new Rect(0, 0, width, TrackTop));
+
+        // Where a cut can land without costing a re-encode. Only when the strip is zoomed far
+        // enough that they are distinguishable — at zoom 1 an hour of footage has thousands of
+        // them and the lane is a solid bar that says nothing. Cached with the waveform, on the
+        // same key, so this costs nothing on the repaint the playhead causes every frame.
+        if (KeyframeTicks(width) is { } ticks) dc.DrawGeometry(KeyframeBrush, null, ticks);
 
         var selectedSegment = _model.SelectedSegment;
 
@@ -288,13 +314,102 @@ public sealed class TimelineControl : FrameworkElement
     {
         dc.DrawRectangle(WaveBackground, null, new Rect(0, top, width, WaveHeight));
 
-        if (_waveform is null || _waveformWidth != width)
+        // Keyed on the visible window as well as the width, because zooming and scrolling both
+        // change which source frame a column shows. At zoom 1 the window never moves, so playback
+        // repaints without rebuilding — which is the rule this cache exists for, and the one the
+        // thumbnails broke.
+        var start = _model?.VisibleStart ?? 0;
+        var length = _model?.VisibleLength ?? 0;
+
+        if (_waveform is null
+            || _waveformWidth != width
+            || _waveformStart != start
+            || _waveformLength != length)
         {
             _waveform = BuildWaveform(width, top);
             _waveformWidth = width;
+            _waveformStart = start;
+            _waveformLength = length;
         }
 
         if (_waveform is not null) dc.DrawGeometry(WaveBrush, null, _waveform);
+    }
+
+    /// <summary>
+    /// The keyframes inside the visible window, as marks in the ruler lane.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A cut that lands on one lets the whole export be stream-copied instead of re-encoded,
+    /// which is the difference between file-copy speed and a full pass over the footage. That was
+    /// invisible until the export had already started and said so in passing, and there was no
+    /// way to aim at one — <c>Shift+K</c> snaps to the next, and these are what make it possible
+    /// to see where they are first.
+    /// </para>
+    /// <para>
+    /// Drawn only when the window is short enough for them to be individually meaningful. At
+    /// zoom 1 an hour of screen recording holds several thousand and the lane would be a solid
+    /// bar, which is noise wearing the shape of information.
+    /// </para>
+    /// <para>
+    /// Cached on the same key as the waveform, so the repaint the playhead causes on every frame
+    /// of playback rebuilds neither.
+    /// </para>
+    /// </remarks>
+    private Geometry? KeyframeTicks(double width)
+    {
+        if (_model is null || !_model.HasMedia) return null;
+
+        var start = _model.VisibleStart;
+        var length = _model.VisibleLength;
+
+        if (_ticks is not null && _ticksWidth == width && _ticksStart == start && _ticksLength == length)
+            return _ticks;
+
+        _ticksWidth = width;
+        _ticksStart = start;
+        _ticksLength = length;
+        _ticks = BuildKeyframeTicks(width, start, length);
+
+        return _ticks;
+    }
+
+    private Geometry? BuildKeyframeTicks(double width, long start, long length)
+    {
+        // Roughly one every ten pixels at the widest. Past that they stop being marks and become
+        // a fill, and the scan below stops being cheap.
+        if (length <= 0 || length > MaxTickWindowFrames) return null;
+
+        var resolver = new TimelineResolver(_model!.Project);
+        var geometry = new StreamGeometry();
+        var drawn = 0;
+
+        using (var context = geometry.Open())
+        {
+            var end = Math.Min(start + length, _model.DurationFrames);
+
+            for (var frame = start; frame < end; frame++)
+            {
+                if (resolver.Resolve(frame) is not { } resolution) continue;
+
+                var index = _model.IndexOf(resolution.SourceId);
+                if (!index.IsKeyFrame(resolution.SourceFrame)) continue;
+
+                var x = XOf(frame, width);
+
+                context.BeginFigure(new Point(x, 0), isFilled: true, isClosed: true);
+                context.LineTo(new Point(x + 1, 0), isStroked: false, isSmoothJoin: false);
+                context.LineTo(new Point(x + 1, TrackTop), isStroked: false, isSmoothJoin: false);
+                context.LineTo(new Point(x, TrackTop), isStroked: false, isSmoothJoin: false);
+
+                drawn++;
+            }
+        }
+
+        if (drawn == 0) return null;
+
+        geometry.Freeze();
+        return geometry;
     }
 
     /// <summary>
@@ -331,7 +446,8 @@ public sealed class TimelineControl : FrameworkElement
 
         for (var x = 0; x < columns; x++)
         {
-            var frame = (long)((double)x / columns * duration);
+            var frame = _model.VisibleStart + (long)((double)x / columns * _model.VisibleLength);
+            if (frame >= duration) continue;
             if (resolver.Resolve(frame) is not { } resolution) continue;
 
             var peaks = _model.PeaksFor(resolution.SourceId);
@@ -385,8 +501,24 @@ public sealed class TimelineControl : FrameworkElement
         return (TrackTop, Math.Max(12, waveTop - WaveGap - TrackTop));
     }
 
-    private double XOf(long frame, double width) =>
-        _model is null || _model.DurationFrames <= 0 ? 0 : frame / (double)_model.DurationFrames * width;
+    /// <summary>
+    /// Where a timeline frame sits across the strip.
+    /// </summary>
+    /// <remarks>
+    /// The visible window rather than the whole timeline, which is the whole of zooming. At zoom
+    /// 1 the window is the timeline and this is the mapping it always was. Every other placement
+    /// in this control — segment fills, overlay bands, the playhead, both hit tests — already goes
+    /// through this and its inverse, which is why zooming needed no arithmetic anywhere else.
+    /// </remarks>
+    private double XOf(long frame, double width)
+    {
+        if (_model is null || _model.DurationFrames <= 0) return 0;
+
+        var length = _model.VisibleLength;
+        if (length <= 0) return 0;
+
+        return (frame - _model.VisibleStart) / (double)length * width;
+    }
 
     /// <summary>Where a base segment is painted, in this element's coordinates.</summary>
     private Rect SegmentRect(BaseSegment segment, double width)
@@ -486,7 +618,9 @@ public sealed class TimelineControl : FrameworkElement
         if (_model is null || _model.DurationFrames <= 0) return 0;
 
         var fraction = Math.Clamp(x / Math.Max(1, ActualWidth), 0, 1);
-        return (long)(fraction * _model.DurationFrames);
+        var frame = _model.VisibleStart + (long)(fraction * _model.VisibleLength);
+
+        return Math.Clamp(frame, 0, _model.DurationFrames - 1);
     }
 
     // ---- the pointer ---------------------------------------------------------------
@@ -637,6 +771,42 @@ public sealed class TimelineControl : FrameworkElement
 
         PointerUp();
         ReleaseMouseCapture();
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// Zooms about the frame under the pointer.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// One notch is one press of <c>=</c> or <c>-</c>, so the wheel and the keys agree about what
+    /// a step is; a wheel that reported several notches at once — a trackpad, a tilted flick —
+    /// takes them all in one go rather than one and a discarded remainder.
+    /// </para>
+    /// <para>
+    /// The anchor is the pointer rather than the playhead. Zooming at the pointer is what makes
+    /// the wheel worth having: the frame under the cursor stays under the cursor, so getting
+    /// closer to a cut is one gesture and not a zoom followed by hunting for where it went.
+    /// </para>
+    /// <para>
+    /// Separated from <see cref="OnMouseWheel"/> for the reason the three pointer methods are:
+    /// the harness has no cursor to turn, and this is the half worth driving.
+    /// </para>
+    /// </remarks>
+    internal void Wheel(Point point, int delta)
+    {
+        if (_model is null || !_model.HasMedia || delta == 0) return;
+
+        var notches = delta / (double)Mouse.MouseWheelDeltaForOneLine;
+
+        _model.ZoomBy(Math.Pow(2, notches), FrameAt(point.X));
+    }
+
+    protected override void OnMouseWheel(MouseWheelEventArgs e)
+    {
+        if (_model is null || !_model.HasMedia) return;
+
+        Wheel(e.GetPosition(this), e.Delta);
         e.Handled = true;
     }
 
