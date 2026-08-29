@@ -113,7 +113,15 @@ and carries on. Four things follow, and each was got wrong first.
   is in `EditorViewModel.RenderCurrentFrame`: the buffer on screen is the last thing still
   claiming to be this frame, and holding the playhead's own frame is exactly the condition
   `LeaseNearest` reads as "nothing better is available". Nothing flickers in between, because
-  the shell copied the pixels out when it was handed them.
+  the shell copied the pixels out when it was handed them. **The invalidation happens inside
+  `Request`, on the calling thread**, and not only where the pump rebuilds its resolver — doing
+  it only there leaves a window one statement wide: `RenderCurrentFrame` asks for the nearest
+  frame the moment it returns from `Request`, the ring is still holding the previous document's
+  picture at exactly the index being asked for, so it wins on distance and goes up. It is then
+  the right frame of the wrong document, `PreviewSettled` is satisfied by it, and a scripted
+  capture takes it. Invisible during playback, where the document does not change; unmissable
+  where the picture changes and the playhead does not, which is what cropping a clip's content
+  does.
 - **Reverse is served a window at a time, not a frame at a time.** A backwards step has no
   route but the preceding keyframe, so it is a seek — longer than a frame lasts, which means
   serving one at a time never converges: the seek outlasts the frame period, the playhead has
@@ -360,6 +368,40 @@ the way through, and the box that follows is where it lands — locked to the re
 what was cut out is never stretched. The base stays whole underneath, and the delivered size
 does not move.
 
+**`C` while a clip is being aimed crops what it shows.** That is the same question from the
+other end — `O` starts from a rectangle and asks what to do with it, this starts from a clip
+already chosen and asks for the rectangle it never had. All three card rows overlay the whole
+picture, so without it a square cannot be cut out of a 4:3 recording and laid over the video,
+and the one path that could was reachable only for the base under the marks. It is opt-in, so
+the one-step flows are exactly as they were.
+
+- **The canvas becomes the footage, not the frame.** `CanvasSize` answers the mode with the
+  overlay source's own size and `PreviewProject` stages a document whose output is that size,
+  crops off, with the clip covering the whole of it — so the picture on screen is the clip's own,
+  filling the pane at its own shape. That is what makes `ToSourcePixels` an identity here and
+  `Src` fall out of the drag with nothing to map. A box drawn on a letterboxed picture would be
+  measured in a space it was not drawn in, which is the mistake the crop's canvas rule already
+  exists to prevent. `previewSize` in the harness `state` line is the only thing in a run that
+  shows which canvas was used, and `tools/ui/overlay-place.bcs` overlays a 16:9 file onto a 4:3
+  project for exactly that reason — on a source already the output's shape, a canvas that
+  quietly stayed the output's looks identical to one that did not.
+- **`PendingRange` freezes and the playhead is held inside it.** The playhead there runs through
+  the clip's own picture to find a frame worth drawing on — `,` and `.` are bound for it — so
+  reading a position off it would move a clip nobody is looking at. Aiming a clip and choosing
+  its content are the two questions this feature keeps apart, and only one of them is being
+  asked. The clamp lives in the `Playhead` setter so a key, the ruler and a scripted scrub are
+  all safe without any of them knowing about the mode.
+- **`Enter` hands back to aiming and `Esc` goes back too.** Neither commits: a region is part of
+  what the clip shows, and the clip is not in the document yet. Escape backs out of the thing
+  being drawn and lands where that thing was started from — crop mode was entered from Normal
+  and returns there, this was entered from placement and returns there. The destination box is
+  reshaped to the region's ratio at the width it already had rather than dropped back in the
+  corner, so an aim already taken survives. The delivered size does not move: a cut-out is laid
+  over the picture, never taken out of it.
+- **There is one `PendingRect` and, for the length of this, two rectangles wanting it.** The
+  destination waits in `_pendingDest` — they cannot share a field across the step without one of
+  them being lost, and the destination is the one nobody is looking at.
+
 **Where** is answered by the playhead. `PendingRange` is a function of it, recomputed in the
 `Playhead` setter, so moving the playhead by any means — a key, the ruler, an audio sync —
 carries the clip and its ghost band along. Two rules follow:
@@ -536,8 +578,10 @@ Each command echoes `OK <command>`; captures print `SHOT <absolute path>` on the
 2 the environment is wrong, 3 the watchdog fired.
 
 ```
-sample <path> [seconds]     synthesise a testsrc2 clip (its frame number is printed in the
-                            picture) over a tone with an aperiodic envelope
+sample <path> [seconds] [WxH]  synthesise a testsrc2 clip (its frame number is printed in the
+                            picture) over a tone with an aperiodic envelope. 640x360 unless a
+                            size is given — worth giving when the question is about shapes,
+                            which a source already the output's shape cannot pose
 sample-cameras <a> <b> [sec]  two clips of one event, through two rooms and two microphones.
                             The far camera starts 4s late and stops with the near one, so it
                             is that much shorter and its frame 0 is the base's frame 120. Two
@@ -579,7 +623,8 @@ draw-rect <x0> <y0> <x1> <y1> [shift]
                                     of its own. The press must land outside the box already
                                     there, or it moves that one instead. `shift` holds the key
                                     down for the length of the drag, snapping to the video's
-                                    ratio.
+                                    ratio. In `OverlayCrop` the canvas pixels are the overlay
+                                    source's own, not the delivered frame's.
 drag-rect-corner <x0> <y0> <x1> <y1> [shift]
                                     grab the corner nearest the first point and drag it to
                                     the second, which reshapes one edge and leaves the other
@@ -592,8 +637,11 @@ state                       one JSON line: playhead, duration, marks, mode, hasM
                             overlaySrc, delivered, muted, canUndo, previewSize, looping, zoom,
                             visibleStart, visibleLength, status
 assert-status <substring> | assert-timecode <text> | assert-frame <n>
-assert-mode Normal|Crop|Overlay|OverlaySource   the card is a mode, and this is what says
-                                                a choice has been taken
+assert-mode Normal|Crop|Overlay|OverlaySource|OverlayCrop
+                                                the card is a mode, and this is what says
+                                                a choice has been taken. OverlayCrop is the
+                                                step that says which part of its own picture
+                                                a pending clip shows
 assert-frame-between <a> <b> | assert-visible <Name> | assert-hidden <Name>
 assert-overlay-source-start <a> [b]   where the overlay in question reads from
 assert-overlay-start <a> [b] | assert-overlay-end <a> [b]

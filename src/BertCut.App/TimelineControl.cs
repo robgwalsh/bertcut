@@ -290,7 +290,11 @@ public sealed class TimelineControl : FrameworkElement
         // faint and outlined. Faint because it is a proposal; in the overlay lane and not
         // somewhere of its own because where it lands is the whole question. Painted over the
         // committed bands, since it truncates whatever it overlaps when it is placed.
-        if (_model.Mode == EditorMode.Overlay)
+        //
+        // Drawn while its content is being cropped too: the clip is still being placed, and a
+        // band that went dark while a different question was answered would read as having
+        // lost it.
+        if (_model.Mode is EditorMode.Overlay or EditorMode.OverlayCrop)
             dc.DrawRectangle(
                 OverlayPendingBrush, OverlayPendingPen, OverlayBandRect(_model.PendingRange, width));
 

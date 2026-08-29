@@ -68,6 +68,21 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     private FrameRange _pendingRange;
     private OverlayContent? _pendingContent;
     private RectI? _pendingSrc;
+
+    /// <summary>
+    /// Where the clip was going to land, set aside while its content is being cropped.
+    /// </summary>
+    /// <remarks>
+    /// There is one <see cref="PendingRect"/> and, for the length of
+    /// <see cref="EditorMode.OverlayCrop"/>, two rectangles wanting it — the destination, in
+    /// delivered pixels, and the region, in the source's own. They cannot share a field across
+    /// that step without one of them being lost, and the destination is the one nobody is
+    /// looking at, so it waits here.
+    /// </remarks>
+    private RectI _pendingDest;
+
+    /// <summary>The staged document <see cref="ContentOnlyProject"/> hands the pump.</summary>
+    private Project? _contentPreview;
     private double _timelineZoom = 1;
     private long _visibleStart;
     private bool _isLooping;
@@ -170,8 +185,11 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     /// "not Normal": <see cref="EditorMode.OverlaySource"/> is a question about which clip,
     /// asked before there is a rectangle to put anywhere. <c>RectEditor</c> watches this, and
     /// a box appearing behind the card would be answering a question nobody had asked yet.
+    /// Every other mode here is a rectangle being positioned, whether it is the region a clip
+    /// shows or the place that region lands.
     /// </remarks>
-    public bool IsPlacing => Mode is EditorMode.Crop or EditorMode.Overlay;
+    public bool IsPlacing =>
+        Mode is EditorMode.Crop or EditorMode.Overlay or EditorMode.OverlayCrop;
 
     /// <summary>True while the overlay source card is up.</summary>
     public bool IsChoosingOverlaySource => Mode == EditorMode.OverlaySource;
@@ -246,9 +264,28 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     /// has resized. Both the preview's own composite size and <c>RectEditor</c>'s screen
     /// mapping come from here, so the box is always drawn in the space it is measured in.
     /// </remarks>
-    public (int Width, int Height) CanvasSize => Mode == EditorMode.Crop
-        ? (Project.Output.Width, Project.Output.Height)
-        : Project.DeliveredSize;
+    /// <remarks>
+    /// <see cref="EditorMode.OverlayCrop"/> is the third answer, and the furthest from the
+    /// delivered frame: the region being drawn there is a region of the <i>footage</i>, so the
+    /// canvas is the footage. That is what makes <see cref="ToSourcePixels"/> an identity map on
+    /// the way out, and it is why <see cref="PreviewProject"/> puts the clip's own picture on
+    /// screen at that size rather than the frame it will land on.
+    /// </remarks>
+    public (int Width, int Height) CanvasSize
+    {
+        get
+        {
+            if (Mode == EditorMode.Crop) return (Project.Output.Width, Project.Output.Height);
+
+            if (Mode == EditorMode.OverlayCrop
+                && Project.FindSource(PendingOverlaySourceId) is { } source)
+            {
+                return (source.Width, source.Height);
+            }
+
+            return Project.DeliveredSize;
+        }
+    }
 
     // There used to be an OverlaySourceId here — "the most recently imported file, or the base
     // video itself" — which is what a new overlay was silently taken from. The source card asks
@@ -264,6 +301,14 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         private set
         {
             var clamped = Math.Clamp(value, 0, Math.Max(0, DurationFrames - 1));
+
+            // While a clip's content is being cropped the picture on screen is the clip's own,
+            // so the playhead has to stay somewhere the clip exists. Held here rather than at
+            // each caller, so that stepping a frame, the ruler and a scripted scrub are all
+            // safe without any of them knowing about the mode.
+            if (_mode == EditorMode.OverlayCrop && !_pendingRange.IsEmpty)
+                clamped = Math.Clamp(clamped, _pendingRange.Start, _pendingRange.End - 1);
+
             if (_playhead == clamped) return;
 
             _playhead = clamped;
@@ -1014,6 +1059,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
             case EditorIntent.Commit: CommitPlacement(); break;
             case EditorIntent.Cancel: CancelPlacement(); break;
             case EditorIntent.OverlayRegion: OverlayPendingRegion(); break;
+            case EditorIntent.CropOverlayContent: BeginOverlayCrop(); break;
 
             case EditorIntent.ChooseOverlayMarkedRange: ChooseOverlayMarkedRange(); break;
             case EditorIntent.ChooseOverlaySegment: ChooseOverlaySegment(); break;
@@ -1344,7 +1390,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
             PendingRect, canvasW, canvasH, Anchor.BottomRight, margin: canvasW / 50);
 
         Status = $"Placing {what} · move the playhead to aim it · A syncs it by sound · "
-                 + "arrows move the box · Enter places · Esc cancels";
+                 + "arrows move the box · C crops what it shows · Enter places · Esc cancels";
     }
 
     /// <summary>
@@ -1356,9 +1402,24 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     /// <see cref="OnDocumentChanged"/>, because an undo can shorten the timeline out from
     /// under a clip that is still being positioned.
     /// </remarks>
+    /// <remarks>
+    /// While the content is being cropped the range is <em>held</em> rather than recomputed.
+    /// The playhead there is running through the clip's own picture to find a frame worth
+    /// drawing on, so reading a position off it would move a clip nobody is looking at — the
+    /// two questions this feature keeps apart, asked in one breath. It is still clamped,
+    /// because an undo reaches every mode and can shorten the timeline under it.
+    /// </remarks>
     private void UpdatePendingRange()
     {
-        if (Mode != EditorMode.Overlay || _pendingContent is not { } content) return;
+        if (_pendingContent is not { } content) return;
+
+        if (Mode == EditorMode.OverlayCrop)
+        {
+            PendingRange = PendingRange.ClampTo(Project.DurationFrames);
+            return;
+        }
+
+        if (Mode != EditorMode.Overlay) return;
 
         PendingRange = OverlayPlacement.RangeAt(Project, content, Playhead);
     }
@@ -1367,6 +1428,14 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     {
         switch (Mode)
         {
+            // The one placement that commits nothing. A region is part of what the clip shows,
+            // and the clip is not in the document yet — so this answers half a question and
+            // hands the other half back, exactly as O in crop mode does on the way in.
+            case EditorMode.OverlayCrop:
+                var media = Project.RequireSource(PendingOverlaySourceId);
+                ReturnToPlacement(ToSourcePixels(PendingRect, media));
+                return;
+
             case EditorMode.Crop:
                 var range = PendingRange;
                 var rect = PendingRect;
@@ -1468,14 +1537,97 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         return new RectI(x, y, w, h);
     }
 
-    /// <summary>Backs out of an overlay, from either half of it.</summary>
+    /// <summary>Asks which part of its own picture the pending clip shows.</summary>
     /// <remarks>
+    /// <para>
+    /// The card settles what a clip shows and for how long. This reopens the first half of
+    /// that and only the first half: the length does not move, the position does not move, and
+    /// the question is which rectangle of the footage goes in. Content chosen off the card
+    /// arrives whole, so without this a square cannot be cut out of a 4:3 recording and laid
+    /// over the video — the one path that could, <see cref="OverlayPendingRegion"/>, starts
+    /// from the rectangle instead and can only ever answer for the base under the marks.
+    /// </para>
+    /// <para>
+    /// The playhead is pulled inside the pending range because that range is what the preview
+    /// shows the content across, and a clip clamped against the end of the timeline can start
+    /// behind the playhead and end before it. Nothing is lost by moving it: the clip does not
+    /// follow the playhead in this mode, since <see cref="UpdatePendingRange"/> is guarded on
+    /// the mode being left behind.
+    /// </para>
+    /// </remarks>
+    private void BeginOverlayCrop()
+    {
+        if (Mode != EditorMode.Overlay || PendingRange.IsEmpty) return;
+        if (Project.FindSource(PendingOverlaySourceId) is not { } source) return;
+
+        ShuttleRate = 0;
+        _pendingDest = PendingRect;
+        _contentPreview = null;
+        Playhead = Math.Clamp(Playhead, PendingRange.Start, PendingRange.End - 1);
+
+        // Before the rectangle, whose setter renders: the canvas is the source's own frame
+        // from this line onwards, and a box measured against the old one would be drawn in a
+        // space that has already gone.
+        Mode = EditorMode.OverlayCrop;
+
+        // An existing region is what the box starts as — re-cropping is adjusting the one
+        // that is there, not drawing over the top of it from scratch.
+        PendingRect = _pendingSrc ?? RectPlacement.Initial(
+            source.Width, source.Height, source.Width, source.Height,
+            fraction: 0.6, Anchor.Centre);
+
+        Status = $"Cropping what the clip shows, out of {source.Width}x{source.Height} · "
+                 + "drag the box or its corners · hold Shift to keep the picture's shape · "
+                 + "Enter takes it · Esc goes back to placing";
+    }
+
+    /// <summary>Hands a chosen region back to the clip that is being positioned.</summary>
+    /// <remarks>
+    /// The destination box is reshaped rather than replaced. Its ratio has to change — a
+    /// region is laid over the video at its own shape or not at all — but its width and its
+    /// corner are an aim the user may already have taken, and throwing that away to drop the
+    /// box back in the bottom right would undo work to report success.
+    /// </remarks>
+    private void ReturnToPlacement(RectI region)
+    {
+        _pendingSrc = region;
+        Mode = EditorMode.Overlay;
+
+        var (canvasW, canvasH) = CanvasSize;
+        var (w, h) = RectPlacement.FitAspect(
+            _pendingDest.W, region.W, region.H, canvasW, canvasH);
+
+        PendingRect = RectPlacement.Clamp(
+            _pendingDest with { W = w, H = h }, canvasW, canvasH);
+
+        Status = $"Showing a {region.W}x{region.H} region · move the playhead to aim it · "
+                 + "arrows move the box · C crops it again · Enter places · Esc cancels";
+    }
+
+    /// <summary>Backs out of an overlay, from any of its halves.</summary>
+    /// <remarks>
+    /// <para>
     /// Not <see cref="IsPlacing"/>: Escape has to put the source card away too, and that is
     /// the one mode where there is no rectangle in play.
+    /// </para>
+    /// <para>
+    /// Escape backs out of the thing being drawn, which is not always the whole placement.
+    /// Cropping the content was entered from placement and so returns to it, the same way crop
+    /// mode was entered from Normal and returns there. Tearing the clip down instead would
+    /// spend a choice the user never took back.
+    /// </para>
     /// </remarks>
     private void CancelPlacement()
     {
         if (Mode == EditorMode.Normal) return;
+
+        if (Mode == EditorMode.OverlayCrop)
+        {
+            Mode = EditorMode.Overlay;
+            PendingRect = _pendingDest;
+            Status = "Kept the clip as it was";
+            return;
+        }
 
         _pendingContent = null;
         _pendingSrc = null;
@@ -1532,11 +1684,25 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     /// readily as before it. It changes nothing for an overlay, whose box is already held to
     /// a ratio it must not leave.
     /// </para>
+    /// <para>
+    /// Cropping an overlay's content is the crop's deal, not the overlay's: it is free-shaped
+    /// for the same reason — the region worth keeping is the user's judgement — and Shift lends
+    /// it the ratio of the picture it is being cut out of, which here is the source's rather
+    /// than the output's. The lock arrives afterwards, when the region becomes what the
+    /// destination box is held to.
+    /// </para>
     /// </remarks>
     private (int Width, int Height) PendingAspect(bool snapToVideo = false)
     {
         if (Mode == EditorMode.Crop)
             return snapToVideo ? (Project.Output.Width, Project.Output.Height) : (0, 0);
+
+        if (Mode == EditorMode.OverlayCrop)
+        {
+            return snapToVideo && Project.FindSource(PendingOverlaySourceId) is { } content
+                ? (content.Width, content.Height)
+                : (0, 0);
+        }
 
         if (_pendingSrc is { } src) return (src.W, src.H);
 
@@ -1558,7 +1724,9 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         if (!IsPlacing) return;
 
         var (w, h) = CanvasSize;
-        PendingRect = RectPlacement.Resize(PendingRect, factor, w, h, lockAspect: Mode != EditorMode.Crop);
+        PendingRect = RectPlacement.Resize(
+            PendingRect, factor, w, h,
+            lockAspect: Mode is not (EditorMode.Crop or EditorMode.OverlayCrop));
     }
 
     private void SnapTo(Anchor anchor)
@@ -2822,6 +2990,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
     private Project PreviewProject()
     {
         if (Mode == EditorMode.Crop) return TimelineEdits.ClearCrop(Project, PendingRange);
+        if (Mode == EditorMode.OverlayCrop) return ContentOnlyProject();
         if (Mode != EditorMode.Overlay) return Project;
 
         var clip = new OverlayClip(
@@ -2829,6 +2998,59 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
             PendingRect, _pendingSrc);
 
         return TimelineEdits.AddOverlay(Project, clip);
+    }
+
+    /// <summary>
+    /// The pending clip's own picture, filling the frame — what a region is chosen out of.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The third thing the preview does, and the odd one out: it shows something that is not
+    /// the edit at all. A region names a piece of a recording, so the recording is what has to
+    /// be on screen to choose it from — showing the clip at the size it will land at would ask
+    /// the user to pick a rectangle out of a thumbnail, and showing the base underneath would
+    /// ask them to pick it out of the wrong picture entirely.
+    /// </para>
+    /// <para>
+    /// Only the output's <em>dimensions</em> move. The rate stays, so the base track's frame
+    /// conversion is untouched, and the crops come off because a crop is checked against the
+    /// output it was measured on. What is left delivers at the source's own size, which is what
+    /// <see cref="CanvasSize"/> answers with here — so the picture, the box and the pixels the
+    /// box is measured in are all one thing.
+    /// </para>
+    /// <para>
+    /// The clip covers <see cref="PendingRange"/> rather than the whole timeline, so moving the
+    /// playhead inside it runs through the content and the box can be drawn on whichever frame
+    /// shows what the user is aiming at. <see cref="BeginOverlayCrop"/> puts the playhead inside
+    /// that range on the way in, since a clip clamped against the end of the timeline can leave
+    /// it outside.
+    /// </para>
+    /// </remarks>
+    /// <remarks>
+    /// Kept rather than rebuilt per render, because the pump reads the document by reference:
+    /// a fresh object every frame would throw the read-ahead away every frame. Its inputs are
+    /// the document, the pending range and the content, none of which the playhead moves — so
+    /// it is dropped when the mode is entered and when the document changes, and otherwise
+    /// stands.
+    /// </remarks>
+    private Project ContentOnlyProject()
+    {
+        if (_contentPreview is { } cached) return cached;
+
+        if (Project.FindSource(PendingOverlaySourceId) is not { } media) return Project;
+
+        var shown = new OverlayClip(
+            PendingRange, media.Id, PendingOverlaySourceStart,
+            new RectI(0, 0, media.Width, media.Height));
+
+        _contentPreview = Project with
+        {
+            Output = Project.Output with { Width = media.Width, Height = media.Height },
+            Crops = [],
+            Overlays = [shown],
+        };
+
+        return _contentPreview;
     }
 
     /// <summary>
@@ -2887,6 +3109,10 @@ public sealed class EditorViewModel : INotifyPropertyChanged, IDisposable
         // Each consumer builds its own resolver because the hint cache inside one is not
         // shareable; rebuilding is trivial.
         _resolver = new TimelineResolver(project);
+
+        // The staged document a clip's own picture is shown through is built from this one,
+        // so it is exactly as stale as this one now is.
+        _contentPreview = null;
 
         // A selection is an index into a list, and an edit is free to renumber it: a ripple
         // delete drops clips, an undo brings others back, and the index would then be

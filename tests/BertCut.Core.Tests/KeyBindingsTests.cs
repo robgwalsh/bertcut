@@ -66,20 +66,21 @@ public class KeyBindingsTests
     }
 
     [Fact]
-    public void Placement_keys_move_in_both_modes_at_once()
+    public void Placement_keys_move_in_every_placement_mode_at_once()
     {
-        // Crop and overlay placement share their keys deliberately. One row on the Controls
-        // page has to move both, or the gesture for putting a box somewhere stops being one
-        // gesture.
+        // Cropping the video, aiming a clip and cropping what that clip shows all share their
+        // keys deliberately. One row on the Controls page has to move all of them, or the
+        // gesture for putting a box somewhere stops being one gesture.
         var entry = KeyBindings.Default.Entries.First(
             e => e.Intent == EditorIntent.NudgeLeft && e.Category == "Place a box");
 
-        Assert.Equal(2, entry.Slots.Length);
+        Assert.Equal(3, entry.Slots.Length);
 
         var bindings = KeyBindings.Default.Rebind(entry, EditorKey.H, EditorModifiers.None).Bindings;
 
         Assert.Equal(EditorIntent.NudgeLeft, bindings.Resolve(EditorKey.H, EditorModifiers.None, EditorMode.Crop));
         Assert.Equal(EditorIntent.NudgeLeft, bindings.Resolve(EditorKey.H, EditorModifiers.None, EditorMode.Overlay));
+        Assert.Equal(EditorIntent.NudgeLeft, bindings.Resolve(EditorKey.H, EditorModifiers.None, EditorMode.OverlayCrop));
     }
 
     [Fact]
@@ -200,8 +201,15 @@ public class KeyBindingsTests
         var gestures = bindings.ForSettings().SelectMany(g => g).Select(e => e.Gesture).ToList();
 
         Assert.Contains("R", gestures);
-        Assert.DoesNotContain("C", gestures);
         Assert.Equal("R", bindings.GestureFor(EditorIntent.BeginCrop));
+
+        // The gesture it left behind is off *this* action, which is all a rebind promises.
+        // C itself is still printed, because cropping what an overlay shows holds it in a
+        // mode of its own — asking whether the page mentions a key at all would fail the
+        // moment any two actions shared one, which several deliberately do.
+        Assert.NotEqual("C", bindings.GestureFor(EditorIntent.BeginCrop));
+        Assert.Equal(
+            EditorIntent.None, bindings.Resolve(EditorKey.C, EditorModifiers.None, EditorMode.Normal));
     }
 
     [Fact]

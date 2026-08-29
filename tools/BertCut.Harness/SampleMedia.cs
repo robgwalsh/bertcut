@@ -33,12 +33,18 @@ internal static class SampleMedia
     private const int Fps = 30;
 
     /// <summary>One clip with a picture-stamped frame counter and a sound to go with it.</summary>
-    public static void Write(FfmpegRuntime runtime, string path, int seconds)
+    /// <remarks>
+    /// 640x360 unless a script asks otherwise, which is the shape every existing one expects.
+    /// A size is worth asking for when the question is about shapes — cutting a square region
+    /// out of a 4:3 recording, say, which a 16:9 sample cannot pose.
+    /// </remarks>
+    public static void Write(
+        FfmpegRuntime runtime, string path, int seconds, int width = 640, int height = 360)
     {
         var wav = Path.ChangeExtension(path, ".wav");
         WriteWav(wav, Event(seconds, seed: 1));
 
-        Encode(runtime, path, wav, seconds);
+        Encode(runtime, path, wav, seconds, width, height);
     }
 
     /// <summary>
@@ -231,7 +237,18 @@ internal static class SampleMedia
         foreach (var sample in samples) writer.Write(sample);
     }
 
-    private static void Encode(FfmpegRuntime runtime, string path, string wav, int seconds)
+    /// <summary>
+    /// Encodes one picture-and-sound pair, at a size the caller may choose.
+    /// </summary>
+    /// <remarks>
+    /// The size is an argument because 640x360 cannot pose the question a region asks. Cutting
+    /// a square out of a 4:3 recording and laying it over the video is the case the overlay
+    /// crop exists for, and on a source whose shape is already the output's, a canvas that
+    /// quietly stayed the output's would look exactly like one that took the source's.
+    /// </remarks>
+    private static void Encode(
+        FfmpegRuntime runtime, string path, string wav, int seconds,
+        int width = 640, int height = 360)
     {
         if (Path.GetDirectoryName(path) is { Length: > 0 } directory)
             Directory.CreateDirectory(directory);
@@ -247,7 +264,7 @@ internal static class SampleMedia
         {
             "-hide_banner", "-y", "-nostdin",
             "-f", "lavfi", "-i",
-            $"testsrc2=size=640x360:rate={Fps}:duration={seconds.ToString(CultureInfo.InvariantCulture)}",
+            $"testsrc2=size={width}x{height}:rate={Fps}:duration={seconds.ToString(CultureInfo.InvariantCulture)}",
             "-i", wav,
             "-c:v", "libopenh264", "-b:v", "4M", "-g", "30", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "128k",

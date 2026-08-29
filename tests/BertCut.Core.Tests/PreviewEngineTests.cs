@@ -44,7 +44,7 @@ public class PreviewEngineTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private string Render(string name, string filter, int seconds = 4)
+    private string Render(string name, string filter, int seconds = 4, string size = "320x240")
     {
         var path = Path.Combine(_dir, name);
         var psi = new ProcessStartInfo(_runtime!.FfmpegPath)
@@ -57,7 +57,7 @@ public class PreviewEngineTests : IDisposable
         foreach (var a in new[]
         {
             "-hide_banner", "-y", "-nostdin",
-            "-f", "lavfi", "-i", $"color=c=black:size=320x240:rate=30:duration={seconds}",
+            "-f", "lavfi", "-i", $"color=c=black:size={size}:rate=30:duration={seconds}",
             "-vf", filter,
             "-c:v", "libopenh264", "-b:v", "4M", "-g", "30", "-pix_fmt", "yuv420p",
             "-fps_mode", "cfr", "-r", "30",
@@ -81,6 +81,20 @@ public class PreviewEngineTests : IDisposable
 
     /// <summary>Flat green, used as an overlay so its footprint is unmistakable.</summary>
     private string MakeGreenSource() => Render("green.mp4", "geq=r='0':g='255':b='0'");
+
+    /// <summary>
+    /// A 2:1 source — left half green, right half white — at a shape no output here has.
+    /// </summary>
+    /// <remarks>
+    /// The shape is the whole point. Choosing a region out of a clip means seeing the clip's
+    /// own frame, and on a source that is already the output's shape a canvas that quietly
+    /// stayed the output's looks exactly like one that took the source's.
+    /// </remarks>
+    private string MakeWideSource() =>
+        Render(
+            "wide.mp4",
+            "geq=r='if(lt(X,W/2),0,255)':g='255':b='if(lt(X,W/2),0,255)'",
+            size: "400x200");
 
     private static (int R, int G, int B) PixelAt(DecodedFrame frame, int x, int y)
     {
@@ -224,6 +238,76 @@ public class PreviewEngineTests : IDisposable
         // not taken out of it.
         var (br, _, bb) = PixelAt(engine.Canvas, 70, 120);
         Assert.True(br > 150 && bb < 90, $"below the clip should still be red, was ({br},_,{bb})");
+    }
+
+    /// <summary>
+    /// The document the preview stages while a clip's own picture is being cropped.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Built here the way <c>EditorViewModel.ContentOnlyProject</c> builds it, because this is
+    /// the half of that mode with any risk in it: a region names a piece of footage, so the
+    /// footage has to be on screen at its own shape to choose one out of. The 2:1 source in a
+    /// 4:3 project is what makes the difference visible — a canvas that stayed the output's
+    /// shape would squeeze the picture, and a clip laid out against the output's delivered
+    /// size would leave the base showing round it.
+    /// </para>
+    /// <para>
+    /// The document's own delivered size is asserted unchanged either side. Only the preview's
+    /// staged copy moves; a cut-out is laid over the picture, never taken out of it.
+    /// </para>
+    /// </remarks>
+    [SkippableFact]
+    public async Task A_clip_being_cropped_is_staged_at_its_own_shape_and_covers_the_frame()
+    {
+        Skip.If(_runtime is null, "No FFmpeg 8+ build found.");
+
+        var (project, engine, _) = await SetUpAsync(MakeSplitSource(), MakeWideSource());
+        using var _engine = engine;
+
+        Assert.Equal((320, 240), project.DeliveredSize);
+
+        var content = project.RequireSource(2);
+        var staged = project with
+        {
+            Output = project.Output with { Width = content.Width, Height = content.Height },
+            Crops = [],
+            Overlays =
+            [
+                new OverlayClip(
+                    new FrameRange(0, 60), content.Id, SourceStartFrame: 0,
+                    Dest: new RectI(0, 0, content.Width, content.Height)),
+            ],
+        };
+
+        Assert.Equal((400, 200), staged.DeliveredSize);
+
+        engine.SetRenderSize(400, 200);
+        Assert.True(engine.Render(new TimelineResolver(staged), 10));
+
+        // The clip's own split lands halfway across, which it only can if the canvas is its
+        // own frame rather than the output's stretched to hold it.
+        var (lr, lg, lb) = PixelAt(engine.Canvas, 100, 100);
+        Assert.True(lr < 90 && lg > 150 && lb < 90, $"the left half should be green, was ({lr},{lg},{lb})");
+
+        var (rr, rg, rb) = PixelAt(engine.Canvas, 300, 100);
+        Assert.True(rr > 150 && rg > 150 && rb > 150, $"the right half should be white, was ({rr},{rg},{rb})");
+
+        // And the base is nowhere: there is no corner of the frame to draw a region out of
+        // that is not the clip's own picture.
+        // Both halves of the clip are fully green; neither half of the base has any green in
+        // it at all, so one channel answers the whole question.
+        foreach (var (x, y) in new[] { (4, 4), (396, 4), (4, 196), (396, 196), (210, 100) })
+        {
+            var (r, g, b) = PixelAt(engine.Canvas, x, y);
+            Assert.True(
+                g > 150,
+                $"({x},{y}) should be the clip, not the base underneath, was ({r},{g},{b})");
+        }
+
+        // The edit itself is untouched.
+        Assert.Equal((320, 240), project.DeliveredSize);
+        Assert.Empty(project.Overlays);
     }
 
     [SkippableFact]

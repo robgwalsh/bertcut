@@ -1,4 +1,4 @@
-# BertCut
+# BertCut (beta)
 
 [![Latest release](https://img.shields.io/github/v/release/robgwalsh/bertcut?label=release&color=1f6feb)](https://github.com/robgwalsh/bertcut/releases/latest)
 [![Unstable](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Frobgwalsh%2Fbertcut%2Freleases%2Ftags%2Funstable&query=%24.name&label=unstable&color=d29922)](https://github.com/robgwalsh/bertcut/releases/tag/unstable)

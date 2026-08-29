@@ -127,6 +127,17 @@ public sealed class PreviewPump : IDisposable
     /// seek, or a paused editor — reads ahead forwards, because that is the direction the
     /// next keystroke is most likely to go.
     /// </param>
+    /// <remarks>
+    /// <b>A new document invalidates the ring here, on the caller's thread, and not only when
+    /// the pump gets round to it.</b> The pump does it too, because that is where the resolver
+    /// is rebuilt — but doing it only there leaves a window: the caller returns from this and
+    /// asks for the nearest frame straight away, and the ring is still holding the previous
+    /// document's picture at exactly the index being asked for, so it wins on distance and
+    /// goes on screen. Nothing is wrong with it except that it is the wrong picture, and it
+    /// stays up until something moves. The gap is invisible during playback, where the
+    /// document does not change, and unmissable where the picture changes without the
+    /// playhead moving — swapping the preview for a clip's own footage, say.
+    /// </remarks>
     public void Request(Project project, long frame, int direction)
     {
         ArgumentNullException.ThrowIfNull(project);
@@ -134,6 +145,12 @@ public sealed class PreviewPump : IDisposable
         lock (_gate)
         {
             if (_stopping) return;
+
+            // Reference equality, exactly as on the pump thread: the document is immutable,
+            // so the same reference is the same picture, and a whole run of playback holds
+            // one and invalidates nothing.
+            if (!ReferenceEquals(_wantProject, project))
+                foreach (var slot in _ring) slot.Index = -1;
 
             _wantProject = project;
             _wantFrame = frame;

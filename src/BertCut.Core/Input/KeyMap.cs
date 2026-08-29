@@ -44,6 +44,18 @@ public enum EditorMode
     Overlay,
 
     /// <summary>
+    /// Choosing which part of its own picture a pending overlay shows.
+    /// </summary>
+    /// <remarks>
+    /// The other half of <see cref="Overlay"/>, and the reason the two are separate modes
+    /// rather than one: that one asks where the clip lands, this one asks what is in it. The
+    /// canvas here is the <i>footage</i> the clip reads rather than the frame it lands on, so
+    /// the box drawn is in the source's own pixels and reaches ffmpeg's crop filter with
+    /// nothing to map.
+    /// </remarks>
+    OverlayCrop,
+
+    /// <summary>
     /// Choosing what a new overlay will show, before there is anything to position.
     /// </summary>
     /// <remarks>
@@ -135,6 +147,18 @@ public enum EditorIntent
     /// content, and the box that follows is where on the frame it lands.
     /// </remarks>
     OverlayRegion,
+
+    /// <summary>
+    /// Crop what a pending overlay shows, rather than what it lands on.
+    /// </summary>
+    /// <remarks>
+    /// The mirror of <see cref="OverlayRegion"/>, entered from the other end. That one starts
+    /// from a rectangle and asks what to do with it; this one starts from a clip already
+    /// chosen and asks for the rectangle it never had. Content picked off the source card
+    /// arrives whole, and a clip that shows the whole of a 4:3 recording cannot be laid over
+    /// the video as a square without this.
+    /// </remarks>
+    CropOverlayContent,
 
     SnapTopLeft, SnapTopRight, SnapBottomLeft, SnapBottomRight, SnapCenter,
 
@@ -290,11 +314,25 @@ public static class KeyMap
         // a rectangle somewhere is the same one in both modes.
         .. PlacementBindings(EditorMode.Crop, "Apply the crop"),
         .. PlacementBindings(EditorMode.Overlay, "Place the overlay"),
+        .. PlacementBindings(EditorMode.OverlayCrop, "Take this region"),
 
         // The second thing a drawn region can be. Enter keeps it and throws the rest of the
         // frame away; this keeps the frame and lays the region back over it.
         new(EditorKey.O, EditorModifiers.None, EditorMode.Crop, EditorIntent.OverlayRegion,
             "Overlay this region onto the video instead of cropping to it"),
+
+        // The same question from the other end: a clip chosen off the card arrives whole, and
+        // this is where it is cut down. C is the crop key everywhere else and was free here.
+        new(EditorKey.C, EditorModifiers.None, EditorMode.Overlay, EditorIntent.CropOverlayContent,
+            "Crop what this clip shows"),
+
+        // Stepping through the clip's own picture to find a frame worth drawing the region on.
+        // Not Home and End, which in Overlay mode move the clip: where it goes is the question
+        // this mode is deliberately not asking.
+        new(EditorKey.Comma, EditorModifiers.None, EditorMode.OverlayCrop, EditorIntent.StepBack, "Look at the previous frame of it"),
+        new(EditorKey.Period, EditorModifiers.None, EditorMode.OverlayCrop, EditorIntent.StepForward, "Look at the next frame of it"),
+        new(EditorKey.Comma, EditorModifiers.Shift, EditorMode.OverlayCrop, EditorIntent.StepBackSecond, "Back one second"),
+        new(EditorKey.Period, EditorModifiers.Shift, EditorMode.OverlayCrop, EditorIntent.StepForwardSecond, "Forward one second"),
 
         // Saying what to overlay. Three rows on a card, and the digits printed on them.
         new(EditorKey.D1, EditorModifiers.None, EditorMode.OverlaySource, EditorIntent.ChooseOverlayMarkedRange, "Overlay the marked range"),
@@ -388,7 +426,7 @@ public static class KeyMap
     public static string Category(KeyBinding binding) => binding.Mode switch
     {
         EditorMode.OverlaySource => "Overlay what",
-        EditorMode.Crop or EditorMode.Overlay => "Place a box",
+        EditorMode.Crop or EditorMode.Overlay or EditorMode.OverlayCrop => "Place a box",
         _ => binding.Intent switch
         {
             EditorIntent.PlayPause or EditorIntent.ShuttleForward or EditorIntent.ShuttleReverse

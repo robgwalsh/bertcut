@@ -160,14 +160,43 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
 
     // ---- loading ----------------------------------------------------------------------
 
+    /// <summary>
+    /// Synthesises a clip: <c>sample &lt;path&gt; [seconds] [WxH]</c>.
+    /// </summary>
+    /// <remarks>
+    /// The size is optional and last, so every script written before it existed still means
+    /// what it said. It is worth having because a question about shapes cannot be asked of a
+    /// source that is already the output's shape — cutting a square out of a 4:3 recording
+    /// looks the same on a 16:9 sample whether the canvas took the source's shape or not.
+    /// </remarks>
     private void Sample(string rest)
     {
         var (path, tail) = Split(rest);
         if (path.Length == 0) throw new FormatException("sample needs a file name.");
 
-        var seconds = tail.Length == 0 ? 6 : Number(tail, "sample");
+        var (secondsText, sizeText) = Split(tail);
 
-        SampleMedia.Write(session.Runtime, Resolve(path), seconds);
+        var seconds = secondsText.Length == 0 ? 6 : Number(secondsText, "sample");
+        var (width, height) = sizeText.Length == 0 ? (640, 360) : Size(sizeText, "sample");
+
+        SampleMedia.Write(session.Runtime, Resolve(path), seconds, width, height);
+    }
+
+    /// <summary>Parses a <c>WxH</c> token.</summary>
+    private static (int Width, int Height) Size(string text, string verb)
+    {
+        var parts = text.Split('x', 'X');
+
+        if (parts.Length != 2
+            || !int.TryParse(parts[0], CultureInfo.InvariantCulture, out var width)
+            || !int.TryParse(parts[1], CultureInfo.InvariantCulture, out var height)
+            || width < 2 || height < 2 || width % 2 != 0 || height % 2 != 0)
+        {
+            throw new FormatException(
+                $"'{text}' is not a size for {verb}. Use WxH, both even, such as 640x480.");
+        }
+
+        return (width, height);
     }
 
     /// <summary>A silent GIF at a fractional rate, for importing as a segment.</summary>
@@ -739,7 +768,7 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
     /// <summary>The crop being drawn, or the one covering the playhead.</summary>
     private static RectI? CropInQuestion(EditorViewModel model)
     {
-        if (model.Mode == EditorMode.Crop) return model.PendingRect;
+        if (model.Mode is EditorMode.Crop or EditorMode.OverlayCrop) return model.PendingRect;
 
         foreach (var crop in model.Project.Crops)
             if (crop.Range.Contains(model.Playhead)) return crop.Rect;
@@ -749,7 +778,7 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
 
     /// <summary>The region the overlay in question cuts out of its source, if any.</summary>
     private static RectI? OverlaySrc(EditorViewModel model) =>
-        model.Mode == EditorMode.Overlay
+        model.Mode is EditorMode.Overlay or EditorMode.OverlayCrop
             ? model.PendingOverlaySrc
             : (model.SelectedOverlayClip ?? OverlayAtPlayhead(model))?.Src;
 
@@ -763,7 +792,7 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
     /// </remarks>
     private static long? OverlaySourceStart(EditorViewModel model)
     {
-        if (model.Mode == EditorMode.Overlay) return model.PendingOverlaySourceStart;
+        if (model.Mode is EditorMode.Overlay or EditorMode.OverlayCrop) return model.PendingOverlaySourceStart;
 
         // Selection first, on the same reasoning as OverlayRange below: a clip that has been
         // pointed at is the one being asked about, and trimming its front takes it out from
@@ -783,7 +812,7 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
     /// what every other overlay command in this harness means by "the overlay".
     /// </remarks>
     private static FrameRange? OverlayRange(EditorViewModel model) =>
-        model.Mode == EditorMode.Overlay
+        model.Mode is EditorMode.Overlay or EditorMode.OverlayCrop
             ? model.PendingRange
             : (model.SelectedOverlayClip ?? OverlayAtPlayhead(model))?.Range;
 
@@ -1055,16 +1084,10 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
     {
         var expected = Require(rest, "assert-crop");
 
-        var actual = session.Dispatcher.Invoke(() =>
-        {
-            var model = session.Model;
-            if (model.Mode == EditorMode.Crop) return model.PendingRect.ToString();
-
-            foreach (var crop in model.Project.Crops)
-                if (crop.Range.Contains(model.Playhead)) return crop.Rect.ToString();
-
-            return "none";
-        });
+        // Through the same helper the state line reads, so an assertion and a transcript can
+        // never disagree about which rectangle "the crop" meant.
+        var actual = session.Dispatcher.Invoke(
+            () => CropInQuestion(session.Model)?.ToString() ?? "none");
 
         if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
             throw new AssertionException($"expected the crop to be {expected}, got {actual}.");
@@ -1083,15 +1106,9 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
     {
         var expected = Require(rest, "assert-overlay-src");
 
-        var actual = session.Dispatcher.Invoke(() =>
-        {
-            var model = session.Model;
-            var src = model.Mode == EditorMode.Overlay
-                ? model.PendingOverlaySrc
-                : (model.SelectedOverlayClip ?? OverlayAtPlayhead(model))?.Src;
-
-            return src?.ToString() ?? "none";
-        });
+        // The state line's helper, for the same reason as assert-crop above.
+        var actual = session.Dispatcher.Invoke(
+            () => OverlaySrc(session.Model)?.ToString() ?? "none");
 
         if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
             throw new AssertionException($"expected the cut-out region to be {expected}, got {actual}.");

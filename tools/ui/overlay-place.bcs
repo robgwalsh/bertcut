@@ -190,3 +190,128 @@ shot 09-file
 key Enter
 assert-overlays 1
 state
+
+# ---- cropping what the clip shows ------------------------------------------------------
+#
+# The card settles what a clip shows and for how long. C reopens the first half of that and
+# only the first half — which part of the picture — so the length and the position are the
+# ones already chosen. The sample is 4:3 here because that is the question: a square cut out
+# of a 4:3 recording looks the same on a 16:9 source whether the canvas took the source's
+# shape or quietly stayed the output's.
+
+reset
+sample tall.mp4 6 480x360
+open tall.mp4
+assert-delivered 480x360
+
+goto 60
+key S
+goto 120
+key S
+select-segment 90
+assert-segment-selected 1
+
+goto 0
+key P
+overlay-source segment
+assert-mode Overlay
+assert-overlay-src none
+assert-overlay-start 0
+assert-overlay-end 60
+assert-overlay-source-start 60
+
+key C
+assert-mode OverlayCrop
+assert-status Cropping what the clip shows
+shot 10-cropping-content
+
+# Drawn on the clip's own frame, in the clip's own pixels — which is why the numbers that
+# come back out are the numbers that went in. Nothing else in a run would show that.
+draw-rect 90 30 390 330
+assert-crop 300x300+90+30
+state
+
+key Enter
+assert-mode Overlay
+assert-overlay-src 300x300+90+30
+
+# The clip did not move while its content was being chosen: two questions, one asked.
+assert-overlay-start 0
+assert-overlay-end 60
+assert-overlay-source-start 60
+shot 11-square-aimed
+
+key Enter
+assert-mode Normal
+assert-overlays 1
+assert-overlay-src 300x300+90+30
+
+# A cut-out is laid over the picture, not taken out of it.
+assert-delivered 480x360
+shot 12-square-placed
+dump-preview 13-square-overlay.png
+
+key Ctrl+Z
+assert-overlays 0
+
+# ---- backing out of the crop keeps the clip --------------------------------------------
+#
+# Esc backs out of the thing being drawn, and lands where that thing was started from — the
+# same rule crop mode follows out to Normal. Tearing the placement down instead would spend
+# a choice nobody took back.
+
+select-segment 90
+goto 0
+key P
+overlay-source segment
+key C
+assert-mode OverlayCrop
+draw-rect 90 30 390 330
+key Escape
+assert-mode Overlay
+assert-overlay-src none
+assert-overlay-start 0
+assert-overlay-end 60
+key Enter
+assert-overlays 1
+assert-overlay-src none
+state
+
+# ---- a clip whose shape is not the project's -------------------------------------------
+#
+# The case that says which frame the box is being drawn on. A 16:9 file overlaid onto a 4:3
+# project is cropped on its own 640x360 canvas, not on the 480x360 one the video delivers —
+# previewSize is the only thing in a run that shows it, and a canvas that quietly stayed the
+# output's would look exactly like one that took the source's.
+
+reset
+sample tall.mp4 6 480x360
+open tall.mp4
+sample wide.mp4 2 640x360
+
+goto 0
+key P
+overlay-source file wide.mp4
+assert-mode Overlay
+assert-delivered 480x360
+
+key C
+assert-mode OverlayCrop
+assert-status out of 640x360
+state
+shot 14-cropping-a-wider-clip
+
+# 620 is off the right of the delivered frame and well inside the clip's own.
+draw-rect 300 40 620 220
+assert-crop 320x180+300+40
+key Enter
+assert-mode Overlay
+assert-overlay-src 320x180+300+40
+
+key Enter
+assert-mode Normal
+assert-overlays 1
+assert-overlay-src 320x180+300+40
+assert-delivered 480x360
+shot 15-wider-clip-placed
+state

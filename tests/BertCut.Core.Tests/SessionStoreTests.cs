@@ -235,8 +235,43 @@ public class KeyMapTests
         Assert.NotEmpty(card);
         Assert.All(card, b => Assert.Equal("Overlay what", KeyMap.Category(b)));
 
-        var placement = KeyMap.Bindings.Where(b => b.Mode is EditorMode.Crop or EditorMode.Overlay);
+        var placement = KeyMap.Bindings.Where(
+            b => b.Mode is EditorMode.Crop or EditorMode.Overlay or EditorMode.OverlayCrop);
+
         Assert.All(placement, b => Assert.Equal("Place a box", KeyMap.Category(b)));
+    }
+
+    [Fact]
+    public void C_crops_the_video_in_normal_mode_and_the_clip_while_one_is_being_placed()
+    {
+        // The same mnemonic against the two pictures a box can be drawn on. Which one it
+        // means is the mode, which is the only thing that distinguishes them.
+        Assert.Equal(
+            EditorIntent.BeginCrop,
+            KeyMap.Resolve(EditorKey.C, EditorModifiers.None, EditorMode.Normal));
+
+        Assert.Equal(
+            EditorIntent.CropOverlayContent,
+            KeyMap.Resolve(EditorKey.C, EditorModifiers.None, EditorMode.Overlay));
+    }
+
+    [Fact]
+    public void Cropping_a_clips_content_steps_through_it_but_never_moves_it()
+    {
+        // The playhead there runs through the clip's own picture to find a frame worth
+        // drawing on. Home and End move the clip in Overlay mode, and where it goes is the
+        // question this mode is deliberately not asking.
+        Assert.Equal(
+            EditorIntent.StepForward,
+            KeyMap.Resolve(EditorKey.Period, EditorModifiers.None, EditorMode.OverlayCrop));
+
+        Assert.Equal(
+            EditorIntent.None,
+            KeyMap.Resolve(EditorKey.Home, EditorModifiers.None, EditorMode.OverlayCrop));
+
+        Assert.Equal(
+            EditorIntent.None,
+            KeyMap.Resolve(EditorKey.A, EditorModifiers.None, EditorMode.OverlayCrop));
     }
 
     [Fact]
