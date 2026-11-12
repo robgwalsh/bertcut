@@ -518,6 +518,12 @@ only exception is the user explicitly asking you to launch it.
 To exercise or see the UI, use the harness. It hosts the same `MainWindow`, in-process and
 parked offscreen, and never reaches the user's screen.
 
+`pwsh .\install.ps1 -Local [-Build] [-Watch]` puts this checkout's `publish\` into the real install
+(`docs/build-and-release.md`, "Installing from the command line"). It closes the user's installed
+BertCut, and when there is no `-local` install yet (or with `-Repack`) it runs Setup, which **opens
+the app** - so never run that first install or `-Repack` yourself, and run a later one only when the
+user asked for local installs.
+
 ## Building and testing
 
 ```powershell
@@ -687,11 +693,32 @@ whole playback path runs — decoders, segment boundaries, the clock the playhea
 something that consumes it at real time and discards it. `--audio` lets it reach the speakers,
 which is as intrusive as putting the window on screen; do not pass it without being asked to.
 
-**Never dispatch a dialog intent.** `OpenFile`, `ImportSource`, `AppendSource` and `Export`
-open a modal Win32 dialog, which is owned by the desktop and *would* appear on the user's
-screen no matter where the window is parked. The harness refuses them and names the
-replacement; use `open`/`import`/`append`. Export is covered headlessly by
-`EndToEndExportTests`.
+**Every file question goes through `IFilePicker`, and the harness's answers from the script.**
+`OpenFile`, `ImportSource`, `AppendSource`, `ChooseOverlayFile`, `SaveFrame` and `Export` ask
+through the window's picker — the Windows dialog in the app, which is owned by the desktop and
+*would* appear on the user's screen no matter where the window is parked. A run is given
+`FakePicker` instead. Unposed, those intents are still refused and the replacement named
+(`open`/`import`/`append`); after `pose-pick <path>|cancel` the next one runs by its own key,
+and `assert-picked open|save [title]` says what it asked. `tools/ui/picker.bcs` is the script.
+A new place that asks for a file asks the picker, never a dialog of its own.
+
+**One editor per state root.** `SingleInstance` (mutex and pipe named from `AppPaths.Root`, so a
+scratch root never meets the user's editor) is claimed in `Main` after Velopack's hooks; a second
+launch sends its path and exits, and `MainWindow.HandOff` opens it as `Ctrl+O` would. The harness
+never runs `Main`, so it never claims anything. What arrives on the pipe is checked by
+`LaunchArgs.IsAcceptablePath` — the pipe is open to everything the user runs.
+
+**The app's picker is BertBrowser when it is installed, and the Windows dialog otherwise.**
+`BertBrowserPicker` makes a pipe, starts BertBrowser with `--pick open|save --reply-pipe <name>`
+(`BertBrowserArgs`), and reads one line back — the path — or an empty close, which is backing out.
+Every failure lands on the Windows dialog or on "nothing chosen": not installed, older than
+`BertBrowserLocator.LastWithoutPicking` (an older copy opens an ordinary window and never answers),
+failing to start, or not connecting in 8 s. After it connects there is no timeout, so the status bar
+grows a Cancel that hangs up. A save is only answered with *where*; overwriting is asked about here,
+because this is the app that writes. Which copy: `BERTCUT_BERTBROWSER` if set, then the one that
+registered itself (`HKCU\Software\BertBrowser` `PickerExe`, written by every BertBrowser start that
+understands `--pick` — so a source build is found, version unasked), then an installed one past the gate. None of this runs under the harness, which is given `FakePicker`; the locator and the
+arguments are pinned in `BertBrowserTests`, and BertBrowser's half in its own `tools/ui/pick.bbs`.
 
 **Do not compare UI screenshots pixel for pixel.** Text rasterisation varies with font version
 and DPI. Captures are for looking at; assert through `state`, `assert-status` and

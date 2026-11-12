@@ -38,13 +38,17 @@ internal sealed class UiSession : IDisposable
 
     private readonly ForegroundGuard _guard;
 
-    private UiSession(HarnessOptions options, MainWindow window, FfmpegRuntime runtime, ForegroundGuard guard)
+    private UiSession(HarnessOptions options, MainWindow window, FfmpegRuntime runtime, ForegroundGuard guard, FakePicker picker)
     {
         _options = options;
         Window = window;
         Runtime = runtime;
         _guard = guard;
+        Picker = picker;
     }
+
+    /// <summary>What the window asks for a file. It answers from the script.</summary>
+    public FakePicker Picker { get; }
 
     public MainWindow Window { get; }
 
@@ -96,9 +100,13 @@ internal sealed class UiSession : IDisposable
 
         // Silent unless the run explicitly asked for sound. A window parked offscreen that
         // played through the speakers would still interrupt whoever is at the keyboard.
+        // Answers from the script. A real picker would appear on the user's screen.
+        var picker = new FakePicker();
+
         var window = new MainWindow(
             runtime,
-            options.Audio ? null : () => new SilentAudioOutput());
+            options.Audio ? null : () => new SilentAudioOutput(),
+            _ => picker);
 
         window.WindowStartupLocation = WindowStartupLocation.Manual;
         window.ShowActivated = false;
@@ -116,7 +124,7 @@ internal sealed class UiSession : IDisposable
 
         window.Show();
 
-        var session = new UiSession(options, window, runtime, guard);
+        var session = new UiSession(options, window, runtime, guard, picker);
         session.Settle();
 
         var after = Native.Foreground();

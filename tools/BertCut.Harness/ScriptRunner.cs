@@ -97,6 +97,8 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
             case "key": Key(rest); break;
             case "intent": Intent(rest); break;
             case "overlay-source": OverlaySource(rest); break;
+            case "pose-pick": PosePick(rest); break;
+            case "assert-picked": AssertPicked(rest); break;
 
             case "select-overlay": SelectOverlay(rest); break;
             case "drag-overlay": DragOverlay(rest); break;
@@ -272,9 +274,9 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
         {
             var resolved = session.Window.Bindings.Resolve(key, modifiers, session.Model.Mode);
 
-            if (DialogIntents.TryGetValue(resolved, out var instead))
+            if (!session.Picker.IsPosed && DialogIntents.TryGetValue(resolved, out var instead))
                 throw new InvalidOperationException(
-                    $"{rest} is bound to {resolved}, which opens a modal dialog on the user's screen. Use: {instead}.");
+                    $"{rest} is bound to {resolved}, which asks for a file. Use: {instead}, or pose-pick first.");
 
             return session.PressKey(key, modifiers);
         });
@@ -328,6 +330,35 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
         session.Settle();
     }
 
+    /// <summary>
+    /// Supplies the answer the next file question will get.
+    /// </summary>
+    /// <remarks>
+    /// The app asks through a picker, and the one a scripted run is given answers from here.
+    /// With an answer posed, the intents that ask — <c>OpenFile</c>, <c>AppendSource</c>,
+    /// <c>Export</c> and the rest — can be driven by their own keys, question and all, where
+    /// they are otherwise refused. <c>cancel</c> poses backing out.
+    /// </remarks>
+    private void PosePick(string rest)
+    {
+        var answer = Require(rest, "pose-pick");
+
+        session.Picker.Pose(answer.Equals("cancel", StringComparison.OrdinalIgnoreCase) ? null : Resolve(answer));
+    }
+
+    /// <summary>Checks what was last asked: <c>open</c> or <c>save</c>, then a piece of its title.</summary>
+    private void AssertPicked(string rest)
+    {
+        var (kind, title) = Split(Require(rest, "assert-picked"));
+        var last = session.Picker.Last ?? throw new AssertionException("Nothing has asked for a file.");
+
+        if (!last.Kind.ToString().Equals(kind, StringComparison.OrdinalIgnoreCase))
+            throw new AssertionException($"The last question was {last.Kind} ('{last.Title}'), not {kind}.");
+
+        if (title.Length > 0 && !last.Title.Contains(title, StringComparison.OrdinalIgnoreCase))
+            throw new AssertionException($"The last question was titled '{last.Title}', which does not mention '{title}'.");
+    }
+
     private void Intent(string rest)
     {
         var name = Require(rest, "intent");
@@ -335,9 +366,9 @@ internal sealed class ScriptRunner(UiSession session, HarnessOptions options, Te
         if (!Enum.TryParse<EditorIntent>(name, ignoreCase: true, out var intent) || intent == EditorIntent.None)
             throw new FormatException($"'{name}' is not an editor intent.");
 
-        if (DialogIntents.TryGetValue(intent, out var instead))
+        if (!session.Picker.IsPosed && DialogIntents.TryGetValue(intent, out var instead))
             throw new InvalidOperationException(
-                $"{intent} opens a modal dialog on the user's screen. Use: {instead}.");
+                $"{intent} asks for a file. Use: {instead}, or pose-pick first.");
 
         session.Dispatcher.Invoke(() => session.Dispatch(intent));
         session.Settle();

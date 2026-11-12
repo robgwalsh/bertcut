@@ -1,4 +1,5 @@
 using System.Windows;
+using BertCut.Core.Updates;
 using Velopack;
 using Velopack.Sources;
 
@@ -17,12 +18,14 @@ public sealed class UpdateService
     private const string RepoUrl = "https://github.com/robgwalsh/bertcut";
 
     private readonly UpdateManager _manager;
+    private readonly bool _fromGitHub;
 
     public UpdateService()
     {
         // BERTCUT_UPDATE_URL points at a local Releases directory (or any static file host) for
         // end-to-end update testing without touching GitHub.
         var overrideUrl = Environment.GetEnvironmentVariable("BERTCUT_UPDATE_URL");
+        _fromGitHub = overrideUrl is not { Length: > 0 };
 
         // Which GitHub releases to look at; Velopack then picks this build's own channel out of
         // them (releases.win.json for a release, releases.unstable.json for a build off main).
@@ -43,6 +46,12 @@ public sealed class UpdateService
         // Dev builds (dotnet run / F5) and harness runs are not Velopack-installed; updating is
         // meaningless there.
         if (!_manager.IsInstalled)
+            return;
+
+        // A checkout's own build installed by install.ps1 -Local. Asked of the *installed* version
+        // rather than AppVersion: later local installs only copy files in, so a publish with no
+        // version stamped is still a local install, and taking the last release would replace it.
+        if (_fromGitHub && ReleaseChannel.IsLocal(_manager.CurrentVersion?.ToString()))
             return;
 
         try

@@ -26,10 +26,25 @@ public static class ReleaseChannel
     /// <summary>The channel name CI passes to <c>vpk pack --channel</c> for builds off <c>main</c>.</summary>
     public const string Unstable = "unstable";
 
+    /// <summary>
+    /// The channel <c>install.ps1 -Local</c> packs a checkout's own build into. A copy installed from
+    /// it never takes an update: the newest published release is not newer than what the developer
+    /// is working on, and updates are mandatory.
+    /// </summary>
+    public const string Local = "local";
+
     /// <summary>Whether <paramref name="version"/> names a build from the unstable channel.</summary>
-    public static bool IsUnstable(string? version)
+    public static bool IsUnstable(string? version) =>
+        ChannelOf(version).Equals(Unstable, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Whether <paramref name="version"/> names a checkout's build installed locally.</summary>
+    public static bool IsLocal(string? version) =>
+        ChannelOf(version).Equals(Local, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The first identifier of the pre-release tag, or empty when there is none.</summary>
+    private static ReadOnlySpan<char> ChannelOf(string? version)
     {
-        if (string.IsNullOrWhiteSpace(version)) return false;
+        if (string.IsNullOrWhiteSpace(version)) return default;
 
         var value = version.AsSpan().Trim();
 
@@ -39,15 +54,13 @@ public static class ReleaseChannel
         if (plus >= 0) value = value[..plus];
 
         var dash = value.IndexOf('-');
-        if (dash < 0) return false;
+        if (dash < 0) return default;
 
         var prerelease = value[(dash + 1)..];
 
         // The tag is dot-separated identifiers and the channel is the first of them, so
         // "unstable.42" matches while "beta.1" does not.
         var dot = prerelease.IndexOf('.');
-        var channel = dot < 0 ? prerelease : prerelease[..dot];
-
-        return channel.Equals(Unstable, StringComparison.OrdinalIgnoreCase);
+        return dot < 0 ? prerelease : prerelease[..dot];
     }
 }

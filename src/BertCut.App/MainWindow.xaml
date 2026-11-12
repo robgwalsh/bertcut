@@ -488,8 +488,19 @@
              play/stop swap for whether it is running, a lit shuttle chip for which way, and
              the label beside them for how fast. -->
         <Border Grid.Row="4" Background="#1A1E24" Padding="12,8">
-            <TextBlock x:Name="StatusLabel" Style="{StaticResource StatusText}"
-                       TextTrimming="CharacterEllipsis" />
+            <DockPanel>
+                <!-- Only while a file is being chosen in BertBrowser. That happens in another
+                     program for as long as the user takes, so this window keeps a way out of
+                     its own: pressing it hangs up, and BertBrowser takes its banner down. -->
+                <Button x:Name="PickCancelButton" DockPanel.Dock="Right"
+                        Style="{StaticResource ToolButton}"
+                        Visibility="Collapsed" Margin="12,-5,0,-5" Padding="12,3"
+                        Focusable="False"
+                        Content="Cancel" Click="OnPickCancelClick"
+                        AutomationProperties.Name="Stop choosing a file in BertBrowser" />
+                <TextBlock x:Name="StatusLabel" Style="{StaticResource StatusText}"
+                           TextTrimming="CharacterEllipsis" />
+            </DockPanel>
         </Border>
 
         <!-- The settings screen, over the editor rather than in a window of its own: it is

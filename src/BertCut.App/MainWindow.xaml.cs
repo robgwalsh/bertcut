@@ -9,12 +9,12 @@ using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using BertCut.Core.Export;
 using BertCut.Core.Input;
+using BertCut.Core.Picking;
 using BertCut.Core.Session;
 using BertCut.Core.Timeline;
 using BertCut.Media;
 using BertCut.Media.Audio;
 using BertCut.Media.Decode;
-using Microsoft.Win32;
 
 namespace BertCut.App;
 
@@ -38,13 +38,29 @@ public partial class MainWindow : Window
     /// </remarks>
     private KeyBindings _keys = KeyBindingStore.Load();
 
+    /// <summary>How the user is asked for a file. Every open and save goes through it.</summary>
+    private readonly IFilePicker _picker;
+
+    private const string VideoFilter =
+        "Video files|*.mp4;*.mkv;*.mov;*.avi;*.webm;*.m4v;*.gif|All files|*.*";
+
     /// <param name="audioOutput">
     /// Where preview audio goes. The app leaves this null and gets the sound card; the
     /// harness passes a silent one, so a scripted run is no more audible than it is visible.
     /// </param>
-    public MainWindow(FfmpegRuntime runtime, Func<IAudioOutput>? audioOutput = null)
+    /// <param name="picker">
+    /// How a file is asked for, given the window that is asking. Null is the Windows dialog.
+    /// The harness passes one that answers from its script: a real picker belongs to the
+    /// desktop and would appear on the user's screen wherever this window is parked.
+    /// </param>
+    public MainWindow(
+        FfmpegRuntime runtime,
+        Func<IAudioOutput>? audioOutput = null,
+        Func<Window, IFilePicker>? picker = null)
     {
         InitializeComponent();
+
+        _picker = picker?.Invoke(this) ?? new WindowsDialogPicker(this);
 
         // Which build this is, and with it which channel — "BertCut 1.2.3" against
         // "BertCut 1.2.4-unstable.42". The title bar is outside the harness's client-area
@@ -135,10 +151,10 @@ public partial class MainWindow : Window
     {
         switch (intent)
         {
-            case EditorIntent.OpenFile: OpenFile(); break;
-            case EditorIntent.ImportSource: ImportFile(); break;
-            case EditorIntent.ChooseOverlayFile: ChooseOverlayFile(); break;
-            case EditorIntent.AppendSource: AppendFile(); break;
+            case EditorIntent.OpenFile: _ = OpenFileAsync(); break;
+            case EditorIntent.ImportSource: _ = ImportFileAsync(); break;
+            case EditorIntent.ChooseOverlayFile: _ = ChooseOverlayFileAsync(); break;
+            case EditorIntent.AppendSource: _ = AppendFileAsync(); break;
             case EditorIntent.Export: _ = ExportAsync(); break;
             case EditorIntent.SaveFrame: _ = SaveFrameAsync(); break;
             case EditorIntent.ToggleSettings: ToggleSettings(); break;
@@ -176,15 +192,90 @@ public partial class MainWindow : Window
     /// <summary>Opens a file directly, e.g. one passed on the command line.</summary>
     public void OpenPath(string path) => Open(path);
 
-    private void OpenFile()
+    /// <summary>
+    /// Takes what a second launch handed over: comes forward, and opens its file if it had one.
+    /// </summary>
+    /// <remarks>
+    /// The file is opened exactly as <c>Ctrl+O</c> would open it, so it is one behaviour to
+    /// learn. Coming forward happens even with no file, because launching the app twice is
+    /// asking to see it.
+    /// </remarks>
+    public void HandOff(string? path)
     {
-        var dialog = new OpenFileDialog
-        {
-            Title = "Open a video",
-            Filter = "Video files|*.mp4;*.mkv;*.mov;*.avi;*.webm;*.m4v;*.gif|All files|*.*",
-        };
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
 
-        if (dialog.ShowDialog(this) == true) Open(dialog.FileName);
+        Activate();
+        Keyboard.Focus(this);
+
+        if (path is not null && File.Exists(path)) Open(path);
+    }
+
+    /// <summary>
+    /// Asks for a file, and gives the keyboard back afterwards.
+    /// </summary>
+    /// <remarks>
+    /// Whatever asked took focus — a dialog, or another application altogether — and bare
+    /// letter keys are this editor's whole interface, so they are useless until it returns.
+    /// One question at a time: a second press while one is out is ignored rather than
+    /// stacked, because the answers would arrive in an order nobody chose.
+    /// </remarks>
+    private async Task<string?> PickAsync(PickRequest request)
+    {
+        if (_picking) return null;
+        _picking = true;
+
+        try
+        {
+            return await _picker.PickAsync(request);
+        }
+        finally
+        {
+            _picking = false;
+            Keyboard.Focus(this);
+        }
+    }
+
+    private bool _picking;
+
+    /// <summary>Hangs up on the picker in another program, while there is one. Null otherwise.</summary>
+    private Action? _cancelPicking;
+
+    /// <summary>What the status line said before it was borrowed to say a file is being chosen.</summary>
+    private string? _statusBeforePicking;
+
+    /// <summary>
+    /// Says that a file is being chosen in another program, and offers the way out.
+    /// </summary>
+    /// <remarks>
+    /// A Windows dialog is modal and needs none of this. BertBrowser is a different window in
+    /// a different process, so this one stays live the whole time — and a live window with a
+    /// question outstanding has to say so and has to be able to withdraw it.
+    /// </remarks>
+    internal void ShowPicking(Action cancel)
+    {
+        _cancelPicking = cancel;
+        _statusBeforePicking ??= StatusLabel.Text;
+        StatusLabel.Text = "Choose the file in BertBrowser — it is waiting in a tab of its own.";
+        PickCancelButton.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>Takes the notice down again. Safe to call when it is not up.</summary>
+    internal void HidePicking()
+    {
+        if (_cancelPicking is null) return;
+
+        _cancelPicking = null;
+        PickCancelButton.Visibility = Visibility.Collapsed;
+        StatusLabel.Text = _statusBeforePicking ?? "";
+        _statusBeforePicking = null;
+    }
+
+    private void OnPickCancelClick(object sender, RoutedEventArgs e) => _cancelPicking?.Invoke();
+
+    private async Task OpenFileAsync()
+    {
+        if (await PickAsync(new PickRequest(PickKind.Open, "Open a video", VideoFilter)) is { } path)
+            Open(path);
     }
 
     /// <summary>
@@ -201,29 +292,19 @@ public partial class MainWindow : Window
         _ = _model.OpenAsync(path);
     }
 
-    private void ImportFile()
+    private async Task ImportFileAsync()
     {
-        var dialog = new OpenFileDialog
-        {
-            Title = "Import a video to overlay",
-            Filter = "Video files|*.mp4;*.mkv;*.mov;*.avi;*.webm;*.m4v;*.gif|All files|*.*",
-        };
-
-        if (dialog.ShowDialog(this) == true) _ = _model.ImportAsync(dialog.FileName);
+        if (await PickAsync(new PickRequest(PickKind.Open, "Import a video to overlay", VideoFilter)) is { } path)
+            _ = _model.ImportAsync(path);
     }
 
     /// <summary>The overlay source card's third row: a file, brought in and placed whole.</summary>
-    private void ChooseOverlayFile()
+    private async Task ChooseOverlayFileAsync()
     {
-        var dialog = new OpenFileDialog
-        {
-            Title = "Choose a video to overlay",
-            Filter = "Video files|*.mp4;*.mkv;*.mov;*.avi;*.webm;*.m4v;*.gif|All files|*.*",
-        };
-
         // Backing out of the picker leaves the card up rather than abandoning the overlay:
         // the user answered "not that file", not "never mind".
-        if (dialog.ShowDialog(this) == true) _ = _model.ImportAndOverlayAsync(dialog.FileName);
+        if (await PickAsync(new PickRequest(PickKind.Open, "Choose a video to overlay", VideoFilter)) is { } path)
+            _ = _model.ImportAndOverlayAsync(path);
     }
 
     /// <summary>
@@ -235,18 +316,18 @@ public partial class MainWindow : Window
     /// against a timeline that does not exist yet. <c>AppendAsync</c> already falls through
     /// to an open in that case; the title is what tells the user so before they commit.
     /// </remarks>
-    private void AppendFile()
+    private async Task AppendFileAsync()
     {
-        var dialog = new OpenFileDialog
-        {
-            Title = _model.HasMedia ? "Add a video to the end of the timeline" : "Open a video",
-            Filter = "Video files|*.mp4;*.mkv;*.mov;*.avi;*.webm;*.m4v;*.gif|All files|*.*",
-        };
+        var title = _model.HasMedia ? "Add a video to the end of the timeline" : "Open a video";
 
-        if (dialog.ShowDialog(this) != true) return;
+        // Beside what is already open, because the next clip of one recording session is
+        // nearly always in the same folder as the last.
+        var start = _model.HasMedia ? Path.GetDirectoryName(_model.Project.Sources[0].Path) : null;
+
+        if (await PickAsync(new PickRequest(PickKind.Open, title, VideoFilter, start)) is not { } path) return;
 
         HideRestoreToast();
-        _ = _model.AppendAsync(dialog.FileName);
+        _ = _model.AppendAsync(path);
     }
 
     // ---- toolbar ---------------------------------------------------------------------
@@ -648,26 +729,18 @@ public partial class MainWindow : Window
         var first = _model.Project.Sources[0];
         var frame = _model.Playhead;
 
-        var dialog = new SaveFileDialog
-        {
-            Title = "Save this frame",
-            Filter = "PNG image|*.png",
-            FileName = $"{Path.GetFileNameWithoutExtension(first.Path)}-{frame}.png",
-            InitialDirectory = Path.GetDirectoryName(first.Path),
-        };
+        var picked = await PickAsync(new PickRequest(
+            PickKind.Save,
+            "Save this frame",
+            "PNG image|*.png",
+            Path.GetDirectoryName(first.Path),
+            $"{Path.GetFileNameWithoutExtension(first.Path)}-{frame}.png"));
 
-        if (dialog.ShowDialog(this) != true)
-        {
-            Keyboard.Focus(this);
-            return;
-        }
-
-        Keyboard.Focus(this);
+        if (picked is not { } path) return;
 
         var project = _model.Project;
         var (width, height) = project.DeliveredSize;
         var output = project.Output with { Width = width, Height = height };
-        var path = dialog.FileName;
 
         StatusLabel.Text = "Saving the frame...";
 
@@ -721,22 +794,14 @@ public partial class MainWindow : Window
         }
 
         var first = _model.Project.Sources[0];
-        var dialog = new SaveFileDialog
-        {
-            Title = "Save as",
-            Filter = "MP4 video|*.mp4|Animated GIF|*.gif",
-            FileName = Path.GetFileNameWithoutExtension(first.Path) + "-edit.mp4",
-            InitialDirectory = Path.GetDirectoryName(first.Path),
-        };
+        var picked = await PickAsync(new PickRequest(
+            PickKind.Save,
+            "Save as",
+            "MP4 video|*.mp4|Animated GIF|*.gif",
+            Path.GetDirectoryName(first.Path),
+            Path.GetFileNameWithoutExtension(first.Path) + "-edit.mp4"));
 
-        if (dialog.ShowDialog(this) != true)
-        {
-            Keyboard.Focus(this);
-            return;
-        }
-
-        // The save dialog took focus; the shortcuts are useless until it comes back.
-        Keyboard.Focus(this);
+        if (picked is not { } destination) return;
 
         _model.FlushSession();
 
@@ -750,7 +815,7 @@ public partial class MainWindow : Window
         {
             var plan = ExportPlanner.Plan(
                 _model.Project,
-                new ExportSettings(dialog.FileName),
+                new ExportSettings(destination),
                 _runtime.Capabilities,
                 _model.IndexOf,
                 temp);
@@ -776,7 +841,7 @@ public partial class MainWindow : Window
 
             await new ExportRunner(_runtime).RunAsync(plan, temp, progress, cancellation.Token);
 
-            StatusLabel.Text = $"Exported to {dialog.FileName}";
+            StatusLabel.Text = $"Exported to {destination}";
         }
         catch (OperationCanceledException)
         {

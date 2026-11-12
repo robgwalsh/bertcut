@@ -47,4 +47,34 @@ public class ReleaseChannelTests
     [Fact]
     public void The_channel_name_is_what_CI_packs_with() =>
         Assert.Equal("unstable", ReleaseChannel.Unstable);
+
+    /// <summary>
+    /// A local build never takes an update, so this going wrong either way is a developer's build
+    /// replaced by the last release on exit, or a release that never updates again.
+    /// </summary>
+    [Theory]
+    [InlineData("0.1.2-local.20261111093000")]
+    [InlineData("0.1.2-LOCAL")]
+    [InlineData(" 0.1.2-local.1+abc ")]
+    public void Recognises_a_local_build(string version)
+    {
+        Assert.True(ReleaseChannel.IsLocal(version));
+        Assert.False(ReleaseChannel.IsUnstable(version));
+    }
+
+    [Theory]
+    [InlineData("0.1.1")]
+    [InlineData("0.1.2-unstable.9")]
+    [InlineData("0.1.2+local")]
+    [InlineData("0.1.2-beta.local")]
+    [InlineData("0.1.2-localish.1")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void Everything_else_is_not_local(string? version) =>
+        Assert.False(ReleaseChannel.IsLocal(version));
+
+    /// <summary>The spelling <c>install.ps1 -Local</c> packs with.</summary>
+    [Fact]
+    public void The_local_channel_name_is_what_install_ps1_packs_with() =>
+        Assert.Equal("local", ReleaseChannel.Local);
 }

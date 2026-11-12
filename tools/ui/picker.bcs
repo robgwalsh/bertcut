@@ -1,0 +1,39 @@
+# The file questions, asked by their own keys and answered by the script.
+#
+# Every open and save goes through one picker. The app's is the Windows dialog (or
+# BertBrowser); a scripted run's answers from pose-pick, so the code on both sides of the
+# question is the app's own and nothing appears on the desktop.
+
+sample clip.mp4 6
+sample more.mp4 4
+
+# Unposed, the keys that ask are still refused: nothing here may open a dialog by accident.
+# The toolbar's front door on an empty editor reads as opening, not appending.
+pose-pick clip.mp4
+intent AppendSource
+assert-picked open Open a video
+assert-has-media
+assert-segments 1
+
+# With something open it is an append, and it starts beside what is already there.
+pose-pick more.mp4
+key Ctrl+A
+assert-picked open Add a video
+assert-segments 2
+
+# Backing out of the question changes nothing.
+pose-pick cancel
+key Ctrl+A
+assert-segments 2
+
+pose-pick cancel
+key Ctrl+E
+assert-picked save Save as
+assert-segments 2
+
+# Ctrl+O replaces what is open.
+pose-pick more.mp4
+key Ctrl+O
+assert-picked open Open a video
+assert-segments 1
+shot 01-picked

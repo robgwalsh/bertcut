@@ -257,6 +257,44 @@ That is also how to check the channel plumbing without publishing anything: pack
 `-unstable.2` into a `Releases\` directory, install the first, point `BERTCUT_UPDATE_URL` at that
 directory, and confirm it finds the second.
 
+## Installing from the command line
+
+`install.ps1` at the repository root installs from any of three sources into the **same** place, Velopack's
+per-user `%LOCALAPPDATA%\BertCut`, so another app looking for an installed BertCut
+(`%LOCALAPPDATA%\BertCut\current\BertCut.exe`, or the Uninstall key's `InstallLocation`) finds whichever
+went in last:
+
+```powershell
+irm https://raw.githubusercontent.com/robgwalsh/bertcut/main/install.ps1 | iex                       # latest release
+iex "& { $(irm https://raw.githubusercontent.com/robgwalsh/bertcut/main/install.ps1) } -Channel unstable"  # or -Version 0.1.0
+pwsh .\install.ps1 -Local [-Build] [-Watch]                                                         # this checkout's publish\
+```
+
+The download forms fetch the release's `Setup.exe` and run it `--silent`; they run in Windows PowerShell 5.1
+as well as 7, and never `exit` (that would close the shell `iex` runs in). Like any Velopack install, Setup
+**starts the app** when it finishes - there is no flag to stop it.
+
+**A local build is a third channel, `local`**, packed as `<next patch>-local.<yyyyMMddHHmmss>`:
+
+- It installs `publish\`, and refuses one without `ffmpeg\ffmpeg.exe` - the same silent failure `pack.ps1`
+  guards. `-Build` runs `fetch-ffmpeg.ps1` and the publish `pack.ps1` does, minus the tests, stamped
+  `<next patch>-local` (fixed per checkout, so an unchanged project stays incremental; it is what the title
+  bar shows).
+- The first `-Local` install, or one over a release/unstable copy, or `-Repack`, packs `publish\`
+  (`vpk pack --channel local --delta None` into `Releases\local-install\`, ~15 s) and runs that Setup, so the
+  install has its stub, shortcuts and Apps & features entry like any other.
+- Every later one copies only the files whose bytes differ into `current\` (~1.5 s in PowerShell 7 for an
+  unchanged 280 MB, nearly all of it hashing; Windows PowerShell 5.1 hashes about five times slower). It closes
+  the installed copy first (politely, then by force after 5 s) - never one running from `bin\`. A file still in
+  use is renamed aside and replaced, and deleted on the next run. Nothing is removed from `current\`, so a file
+  the build stopped producing stays until a `-Repack`. `sq.version` is not touched, so the install stays on
+  `local`.
+- **A `-local` installed version never checks GitHub** (`ReleaseChannel.IsLocal`, asked of Velopack's
+  installed version in `UpdateService`, not of `AppVersion`, since a copied-in publish need not be stamped);
+  otherwise the next release would replace the developer's build on exit. `BERTCUT_UPDATE_URL` still applies.
+  Installing a release or unstable build over it puts it back on that channel.
+- `-Watch` polls `publish\` and installs each time it changes and then holds still for 2 s.
+
 ## How updates reach users
 
 `UpdateService` (in `src/BertCut.App`) checks GitHub Releases on startup, on a background thread,

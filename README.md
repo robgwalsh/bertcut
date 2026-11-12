@@ -12,6 +12,11 @@ This application endeavors to be the fastest way to cut, crop, and/or overlay vi
 winget install RobWalsh.BertCut
 ```
 
+* **Or**, with no winget and no wait for its catalogue, straight from the latest release (add `-Channel unstable` or `-Version 0.1.0` with the second form):
+  ```powershell
+  irm https://raw.githubusercontent.com/robgwalsh/bertcut/main/install.ps1 | iex
+  iex "& { $(irm https://raw.githubusercontent.com/robgwalsh/bertcut/main/install.ps1) } -Channel unstable"
+  ```
 * **Or** grab the [latest installer](https://github.com/robgwalsh/bertcut/releases/latest/download/BertCut-win-Setup.exe) and run it. It installs per-user, with no admin prompt.
 * **Or** download the [latest portable build](https://github.com/robgwalsh/bertcut/releases/latest/download/BertCut-win-Portable.zip) if you'd rather not install anything.
 
